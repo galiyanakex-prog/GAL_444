@@ -1,0 +1,8 @@
+[Desktop Entry]
+Name=Формат ответа Den_2
+Comment=Сравнение режимов контроля ответа LLM
+Exec=/home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/Nedela_1/den_02/run_den2.sh
+Icon=utilities-terminal
+Terminal=true
+Type=Application
+Categories=Development;

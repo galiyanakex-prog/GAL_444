@@ -1,0 +1,9 @@
+#!/usr/bin/env xdg-open
+[Desktop Entry]
+Name=Чат-бот Den_1
+Comment=Первый запрос к LLM через API
+Exec=/home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/Nedela_1/den_01/run_den1.sh
+Icon=utilities-terminal
+Terminal=true
+Type=Application
+Categories=Development;

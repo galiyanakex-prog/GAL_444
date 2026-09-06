@@ -1,0 +1,8 @@
+[Desktop Entry]
+Name=Версии моделей Den_5
+Comment=Сравнение версий моделей LLM
+Exec=/home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/Nedela_1/den_05/run_den5.sh
+Icon=utilities-terminal
+Terminal=true
+Type=Application
+Categories=Development;

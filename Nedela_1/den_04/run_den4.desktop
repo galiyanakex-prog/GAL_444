@@ -1,0 +1,8 @@
+[Desktop Entry]
+Name=Температура Den_4
+Comment=Исследование влияния temperature на ответы LLM
+Exec=/home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/Nedela_1/den_04/run_den4.sh
+Icon=utilities-terminal
+Terminal=true
+Type=Application
+Categories=Development;

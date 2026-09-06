@@ -1,5 +1,6 @@
 # Импортируем модуль os для чтения переменных окружения.
 import os
+import sys
 
 # Импортируем библиотеку для отправки HTTP-запросов к API.
 import requests
@@ -13,6 +14,9 @@ load_dotenv()
 
 # Получаем API-ключ из переменной окружения API_KEY.
 api_key = os.getenv("API_KEY")
+
+# Настраиваем кодировку stdin на UTF-8.
+sys.stdin.reconfigure(encoding='utf-8')
 
 # Проверяем, удалось ли найти API-ключ.
 if not api_key:

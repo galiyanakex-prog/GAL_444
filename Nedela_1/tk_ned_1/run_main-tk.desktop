@@ -1,0 +1,8 @@
+[Desktop Entry]
+Name=AI Chat GUI
+Comment=Графический интерфейс для запуска Den_*.py программ
+Exec=/home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/Nedela_1/tk_ned_1/run_main-tk.sh
+Icon=utilities-terminal
+Terminal=false
+Type=Application
+Categories=Development;
