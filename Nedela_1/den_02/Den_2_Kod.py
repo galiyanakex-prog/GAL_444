@@ -1,6 +1,7 @@
 import argparse
 import json
 import os
+import re
 import sys
 
 import requests
@@ -44,6 +45,15 @@ def build_system_prompt(mode: str, word_limit: int = 100) -> str:
     return base
 
 
+def extract_json(text: str) -> str:
+    """Извлекает JSON из ответа, убирая markdown-обёртку ```json ... ```."""
+    text = text.strip()
+    if text.startswith("```"):
+        text = re.sub(r'^```(?:json)?\s*', '', text)
+        text = re.sub(r'\s*```$', '', text)
+    return text.strip()
+
+
 def validate_json_response(text: str) -> bool:
     """Проверяет, что ответ содержит валидный JSON с ожидаемыми полями."""
     try:
@@ -55,10 +65,11 @@ def validate_json_response(text: str) -> bool:
             return False
         if not isinstance(data["ingredients"], list) or not isinstance(data["steps"], list):
             return False
-        # Проверяем структуру элементов ingredients
+        # Проверяем структуру элементов ingredients (гибкая валидация)
         for item in data["ingredients"]:
             if not isinstance(item, dict):
                 return False
+            # name, weight, order могут быть строками или числами
             if "name" not in item or "weight" not in item or "order" not in item:
                 return False
         return True
@@ -94,7 +105,7 @@ def send_request(messages: list, max_tokens: int = 500, stop: list | None = None
 
 
 def run_mode(label: str, mode: str, user_query: str, stop_seq: list | None = None,
-             temperature: float = 0.7, max_tokens: int = 500) -> None:
+             temperature: float = 0.7, max_tokens: int = 1000) -> None:
     """Запускает один режим, выводит заголовок и ответ."""
     print(f"\n{'=' * 50}")
     print(f"  {label}")
@@ -111,9 +122,10 @@ def run_mode(label: str, mode: str, user_query: str, stop_seq: list | None = Non
                             temperature=temperature)
 
     if mode == "json":
-        if response and validate_json_response(response):
+        cleaned = extract_json(response)
+        if cleaned and validate_json_response(cleaned):
             # Красиво форматируем JSON
-            formatted = json.dumps(json.loads(response), ensure_ascii=False, indent=2)
+            formatted = json.dumps(json.loads(cleaned), ensure_ascii=False, indent=2)
             print(f"Бот: {formatted}")
         else:
             print(f"Бот: {response}")
@@ -239,7 +251,7 @@ def main() -> None:
     # --- JSON-режим ---
     if args.json_mode:
         run_mode("=== JSON-режим (строгий формат + валидация) ===", "json", query,
-                 temperature=args.temperature, max_tokens=args.max_tokens)
+                 temperature=args.temperature, max_tokens=2000)
 
     # --- Stop sequence ---
     if args.stop_sequence:
@@ -247,7 +259,7 @@ def main() -> None:
             "=== Stop sequence режим ===",
             "free",
             query,
-            stop=[args.stop_sequence],
+            stop_seq=[args.stop_sequence],
             temperature=args.temperature,
             max_tokens=args.max_tokens,
         )
