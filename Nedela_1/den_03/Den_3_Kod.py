@@ -292,7 +292,7 @@ def run_interactive(temperature: float = 0.7, max_tokens: int = 500,
         comparison = run_comparison(
             user_input, direct_answer, step_by_step_answer,
             gen_prompt, gen_answer, experts_answer,
-            expected_answer, temperature=temperature, max_tokens=max_tokens
+            expected_answer, temperature=0.2, max_tokens=1024
         )
         print(f"\nБот: {comparison}")
 
@@ -436,7 +436,7 @@ def main() -> None:
         comparison = run_comparison(
             query, direct_answer, step_by_step_answer,
             gen_prompt, gen_answer, experts_answer,
-            args.expected_answer, temperature=args.temperature, max_tokens=args.max_tokens
+            args.expected_answer, temperature=0.2, max_tokens=1024
         )
         print(f"\nБот: {comparison}")
 
