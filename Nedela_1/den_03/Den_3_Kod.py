@@ -35,7 +35,7 @@ RATE_LIMIT_WAIT_SECONDS = 60
 # Вспомогательные функции
 # ---------------------------------------------------------------------------
 
-def send_request(messages: list, max_tokens: int = 500,
+def send_request(messages: list, max_tokens: int = 1024,
                  temperature: float = 0.7) -> str:
     """Отправляет запрос к API и возвращает текст ответа.
     
@@ -96,7 +96,7 @@ def send_request(messages: list, max_tokens: int = 500,
 
 
 def run_direct(user_query: str, temperature: float = 0.7,
-               max_tokens: int = 500) -> str:
+               max_tokens: int = 1024) -> str:
     """Прямой ответ без дополнительных инструкций."""
     messages = [
         {
@@ -109,7 +109,7 @@ def run_direct(user_query: str, temperature: float = 0.7,
 
 
 def run_step_by_step(user_query: str, temperature: float = 0.7,
-                     max_tokens: int = 500) -> str:
+                     max_tokens: int = 1024) -> str:
     """Пошаговое решение (chain-of-thought)."""
     messages = [
         {
@@ -125,7 +125,7 @@ def run_step_by_step(user_query: str, temperature: float = 0.7,
 
 
 def run_generate_prompt(user_query: str, temperature: float = 0.7,
-                        max_tokens: int = 500) -> tuple[str, str]:
+                        max_tokens: int = 1024) -> tuple[str, str]:
     """Сначала модель составляет промпт, затем использует его для решения."""
     # Шаг 1: генерируем промпт
     messages_gen = [
@@ -156,7 +156,7 @@ def run_generate_prompt(user_query: str, temperature: float = 0.7,
 
 
 def run_experts(user_query: str, temperature: float = 0.7,
-                max_tokens: int = 500) -> str:
+                max_tokens: int = 1024) -> str:
     """Группа экспертов: аналитик, инженер, критик — каждый даёт решение."""
     messages = [
         {
@@ -245,7 +245,7 @@ def print_and_return_tuple(label: str, generated_prompt: str, answer: str) -> tu
 # ---------------------------------------------------------------------------
 # Интерактивный режим
 # ---------------------------------------------------------------------------
-def run_interactive(temperature: float = 0.7, max_tokens: int = 500,
+def run_interactive(temperature: float = 0.7, max_tokens: int = 1024,
                     expected_answer: str | None = None) -> None:
     """Запускает интерактивный режим с вводом пользователя."""
     print("🤖 Сравнение способов рассуждения")
@@ -362,9 +362,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--max-tokens",
         type=int,
-        default=500,
+        default=1024,
         metavar="N",
-        help="Максимальное количество токенов в ответе (по умолчанию: 500)",
+        help="Максимальное количество токенов в ответе (по умолчанию: 1024)",
     )
     return parser.parse_args()
 
