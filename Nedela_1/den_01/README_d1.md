@@ -109,8 +109,14 @@ API_KEY=ваш_ключ_от_routerai
 
 Из корня репозитория выполните:
 
+активацию виртуального окружения
 ```bash
-python "001_День 1/Den_1_Kod.py"
+source "Nedela_1/.venv/bin/activate"
+```
+
+запуск
+```bash
+python "Nedela_1/den_01/Den_1_Kod.py"
 ```
 
 После запуска появится приглашение:
