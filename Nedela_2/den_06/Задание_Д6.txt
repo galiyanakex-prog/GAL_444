@@ -1,4 +1,6 @@
-# День 6 — Простой агент LLM: Context & Memory Management
+#AI Advent AI_9  День 6 — Простой агент LLM: Context & Memory Management
+Руководитель проекта: Алексей Гладков (нужно следовать его указаниям).
+
 
 > **Контекст:** Неделя 2 — «Инструментарий LLM: Агенты и их внутреннее устройство».
 > День 6 — первый шаг к созданию полноценного агента с управлением контекстом и памятью.
@@ -170,25 +172,25 @@ class Agent:
 - `Den_6_log_A_Sliding-Window.md`
 - `Den_6_log_B_History-Compression.md`
 - `Den_6_log_C_Context-Leveling.md`
-- `Den_6_log.md'
+- `Den_6_log.md`
 ---
 
 ## Результат
 
 - Класс `Agent` с инкапсулированной логикой запросов к LLM API;
-- Каждая техника управления контекстом реализована в отдельном коде (Den_6_Kod_A_Sliding-Window.py; Den_6_Kod_B_History-Compression.py; Den_6_Kod_C_Context-Leveling.py);
-- Каждый тип памяти с сохранением/загрузкой реализован в отдельном коде (Den_6_Kod_A_Sliding-Window.py; Den_6_Kod_B_History-Compression.py; Den_6_Kod_C_Context-Leveling.py);
+- Каждая техника управления контекстом реализована в отдельном коде (Den_6_Kod_A_Sliding-Window.py; Den_6_Kod_B_History-Compression.py; Den_6_Kod_C_Context-Leveling.py, Den_6_Kod.py);
+- Каждый тип памяти с сохранением/загрузкой реализован в отдельном коде (Den_6_Kod_A_Sliding-Window.py; Den_6_Kod_B_History-Compression.py; Den_6_Kod_C_Context-Leveling.py, Den_6_Kod.py);
 - CLI-интерфейс для взаимодействия с агентом;
-- История диалога сохраняется и загружается из соответствующего файла ('Den_6_log_A_Sliding-Window.md', 'Den_6_log_B_History-Compression.md', 'Den_6_log_C_Context-Leveling.md').
+- История диалога сохраняется и загружается из соответствующего файла (Den_6_log_A_Sliding-Window.md, Den_6_log_B_History-Compression.md, Den_6_log_C_Context-Leveling.md, Den_6_Kod.py).
 
 ---
 
 ## Формат сдачи
 
-1. Код — в файлах: `Den_6_Kod_A_Sliding-Window.py`, `Den_6_Kod_B_History-Compression.py`, `Den_6_Kod_C_Context-Leveling.py`;
+1. Код — в файлах: `Den_6_Kod_A_Sliding-Window.py`, `Den_6_Kod_B_History-Compression.py`, `Den_6_Kod_C_Context-Leveling.py`, `Den_6_Kod.py`;
 2. Описание проекта — в файле `README_d6.md`;
-3. Запускающие скрипты — `run_den6_A_Sliding-Window.sh`, `run_den6_B_History-Compression.sh`, `run_den6_C_Context-Leveling.sh`;
-4. Ярлыки — `run_den6_A_Sliding-Window.desktop`, `run_den6_B_History-Compression.desktop`, `run_den6_C_Context-Leveling.desktop`.
+3. Запускающие скрипты — `run_den6_A_Sliding-Window.sh`, `run_den6_B_History-Compression.sh`, `run_den6_C_Context-Leveling.sh`, `Den_6_Kod.sh`;
+4. Ярлыки — `run_den6_A_Sliding-Window.desktop`, `run_den6_B_History-Compression.desktop`, `run_den6_C_Context-Leveling.desktop`, `Den_6_Kod.desktop`.
 
 ---
 
