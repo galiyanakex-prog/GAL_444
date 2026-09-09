@@ -1,3 +1,4 @@
+
  ПРОМТ: День 6, Вариант B — History Compression + Compressed Memory
 
   Роль
