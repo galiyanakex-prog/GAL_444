@@ -1,0 +1,8 @@
+[Desktop Entry]
+Name=День 6 — Sliding Window
+Comment=Чат-бот со скользящим окном контекста (вариант A)
+Exec=/home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/Nedela_2/den_06/run_den6_A_Sliding-Window.sh
+Icon=utilities-terminal
+Terminal=true
+Type=Application
+Categories=Development;

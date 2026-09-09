@@ -1,7 +1,7 @@
 [Desktop Entry]
-Name=Способы рассуждения Den_3
-Comment=Сравнение способов рассуждения LLM
-Exec=/home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/Nedela_1/den_03/run_den3.sh
+Name=День 6 — Агент (3-in-1)
+Comment=Чат-бот Дня 6: все техники контекста и памяти через флаги
+Exec=/home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/Nedela_2/den_06/run_den6.sh
 Icon=utilities-terminal
 Terminal=true
 Type=Application
