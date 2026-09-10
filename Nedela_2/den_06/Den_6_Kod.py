@@ -24,6 +24,9 @@ import os
 # Импортируем модуль sys для настройки кодировки стандартного ввода.
 import sys
 
+# Импортируем модуль traceback для записи полного стека ошибки в журнал.
+import traceback
+
 # Импортируем модуль time для паузы между повторами при HTTP 429.
 import time
 
@@ -192,6 +195,25 @@ REQUEST_TIMEOUT = 30
 
 # Список задержек между повторами при HTTP 429 (экспоненциальная: 2 → 4 → 8 сек).
 RETRY_DELAYS = [2, 4, 8]
+
+# Имя файла журнала ошибок: сюда пишется полный стек любой непредвиденной ошибки.
+ERROR_LOG = "Den_6_error.log"
+
+
+# Функция записи непредвиденной ошибки в журнал (с полным стеком вызовов).
+def log_error(context, error):
+    # Открываем журнал ошибок в режиме дозаписи с кодировкой UTF-8.
+    with open(ERROR_LOG, "a", encoding="utf-8") as f:
+        # Пишем разделитель с датой, временем и контекстом ошибки.
+        f.write(f"\n{'=' * 60}\n")
+        # Пишем время и место возникновения ошибки.
+        f.write(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] {context}\n")
+        # Пишем тип ошибки и её сообщение.
+        f.write(f"{type(error).__name__}: {error}\n")
+        # Пишем полный стек вызовов — чтобы найти точное место падения.
+        f.write(traceback.format_exc())
+    # Дублируем краткое сообщение в консоль (окно может закрыться).
+    print(f"[Ошибка] {context}: {error} (подробности в {ERROR_LOG})")
 
 # Словарь маркеров слоёв: имя слоя -> список ключевых слов (в нижнем регистре).
 LAYER_MARKERS = {
@@ -883,259 +905,279 @@ print("Введите /exit для завершения.\n")
 
 # Запускаем бесконечный цикл, чтобы пользователь мог отправлять много сообщений.
 while True:
+    try:
     # Показываем приглашение «Вы:», читаем ввод и удаляем пробелы по краям.
-    user_input = input("Вы: ").strip()
+        user_input = input("Вы: ").strip()
 
-    # Обрабатываем команду /history — доступна во всех режимах.
-    if user_input == "/history":
-        # Вызываем обработчик истории.
-        cmd_history(full_history, archived, summary)
-        # Переходим к следующей итерации цикла.
-        continue
+        # Обрабатываем команду /history — доступна во всех режимах.
+        if user_input == "/history":
+            # Вызываем обработчик истории.
+            cmd_history(full_history, archived, summary)
+            # Переходим к следующей итерации цикла.
+            continue
 
-    # Обрабатываем команду /window — только для sliding-window.
-    if user_input == "/window":
-        # Проверяем доступность команды в текущем режиме.
-        if args.context == "sliding-window":
-            # Вызываем обработчик окна.
-            cmd_window(full_history)
-        # В остальных режимах команда недоступна.
-        else:
-            # Сообщаем о недоступности команды.
-            print(f"[Команда] /window недоступна в режиме context={args.context}\n")
-        # Переходим к следующей итерации цикла.
-        continue
+        # Обрабатываем команду /window — только для sliding-window.
+        if user_input == "/window":
+            # Проверяем доступность команды в текущем режиме.
+            if args.context == "sliding-window":
+                # Вызываем обработчик окна.
+                cmd_window(full_history)
+            # В остальных режимах команда недоступна.
+            else:
+                # Сообщаем о недоступности команды.
+                print(f"[Команда] /window недоступна в режиме context={args.context}\n")
+            # Переходим к следующей итерации цикла.
+            continue
 
-    # Обрабатываем команду /summary — для compressed и layered.
-    if user_input == "/summary":
-        # Проверяем доступность команды в текущем режиме.
-        if args.memory in ("compressed", "layered"):
-            # Вызываем обработчик саммари.
-            cmd_summary(summary)
-        # В остальных режимах команда недоступна.
-        else:
-            # Сообщаем о недоступности команды.
-            print(f"[Команда] /summary недоступна в режиме memory={args.memory}\n")
-        # Переходим к следующей итерации цикла.
-        continue
+        # Обрабатываем команду /summary — для compressed и layered.
+        if user_input == "/summary":
+            # Проверяем доступность команды в текущем режиме.
+            if args.memory in ("compressed", "layered"):
+                # Вызываем обработчик саммари.
+                cmd_summary(summary)
+            # В остальных режимах команда недоступна.
+            else:
+                # Сообщаем о недоступности команды.
+                print(f"[Команда] /summary недоступна в режиме memory={args.memory}\n")
+            # Переходим к следующей итерации цикла.
+            continue
 
-    # Обрабатываем команду /compress — для compressed и layered.
-    if user_input == "/compress":
-        # Проверяем доступность команды в текущем режиме.
-        if args.memory in ("compressed", "layered"):
-            # Вызываем обработчик сжатия и обновляем состояние.
-            full_history, summary, archived = cmd_compress(full_history, summary, archived)
-        # В остальных режимах команда недоступна.
-        else:
-            # Сообщаем о недоступности команды.
-            print(f"[Команда] /compress недоступна в режиме memory={args.memory}\n")
-        # Переходим к следующей итерации цикла.
-        continue
+        # Обрабатываем команду /compress — для compressed и layered.
+        if user_input == "/compress":
+            # Проверяем доступность команды в текущем режиме.
+            if args.memory in ("compressed", "layered"):
+                # Вызываем обработчик сжатия и обновляем состояние.
+                full_history, summary, archived = cmd_compress(full_history, summary, archived)
+            # В остальных режимах команда недоступна.
+            else:
+                # Сообщаем о недоступности команды.
+                print(f"[Команда] /compress недоступна в режиме memory={args.memory}\n")
+            # Переходим к следующей итерации цикла.
+            continue
 
-    # Обрабатываем команду /layers — только для layered.
-    if user_input == "/layers":
-        # Проверяем доступность команды в текущем режиме.
+        # Обрабатываем команду /layers — только для layered.
+        if user_input == "/layers":
+            # Проверяем доступность команды в текущем режиме.
+            if args.memory == "layered":
+                # Вызываем обработчик статистики слоёв.
+                cmd_layers(full_history)
+            # В остальных режимах команда недоступна.
+            else:
+                # Сообщаем о недоступности команды.
+                print(f"[Команда] /layers недоступна в режиме memory={args.memory}\n")
+            # Переходим к следующей итерации цикла.
+            continue
+
+        # Обрабатываем команду /layer — только для layered.
+        if user_input.startswith("/layer "):
+            # Проверяем доступность команды в текущем режиме.
+            if args.memory == "layered":
+                # Разбиваем команду на части и вызываем обработчик.
+                cmd_layer(full_history, user_input.split())
+            # В остальных режимах команда недоступна.
+            else:
+                # Сообщаем о недоступности команды.
+                print(f"[Команда] /layer недоступна в режиме memory={args.memory}\n")
+            # Переходим к следующей итерации цикла.
+            continue
+
+        # Обрабатываем команду /clear — доступна во всех режимах.
+        if user_input == "/clear":
+            # Очищаем активную историю (лог-файл при этом сохраняется).
+            full_history = []
+            # Очищаем архив свёрнутых сообщений.
+            archived = []
+            # Для compressed и layered сбрасываем и саммари.
+            if args.memory in ("compressed", "layered"):
+                # Сбрасываем саммари в памяти.
+                summary = ""
+            # Сообщаем пользователю об очистке.
+            print("[Контекст] Контекст очищен (лог-файл сохранён)\n")
+            # Переходим к следующей итерации цикла.
+            continue
+
+        # Обрабатываем команду /exit — доступна во всех режимах.
+        if user_input == "/exit":
+            # Для compressed и layered сохраняем саммари в файл.
+            if args.memory in ("compressed", "layered") and summary:
+                # Сохраняем актуальное саммари в файл.
+                save_compressed_summary(summary)
+                # Сообщаем пользователю, что саммари сохранено.
+                print(f"[Память] Саммари сохранено: {SUMMARY_FILE}")
+            # Сообщаем пользователю, что лог сохранён.
+            print(f"[Память] Лог сохранён: {LOG_FILE}")
+            # Прерываем бесконечный цикл и завершаем программу.
+            break
+
+        # Проверяем, осталась ли строка пустой после удаления пробелов.
+        if not user_input:
+            # Пропускаем текущую итерацию и снова ожидаем пользовательский ввод.
+            continue
+
+        # Для layered-памяти определяем слой сообщения пользователя по маркерам.
         if args.memory == "layered":
-            # Вызываем обработчик статистики слоёв.
-            cmd_layers(full_history)
-        # В остальных режимах команда недоступна.
+            # Автоматически определяем слой сообщения.
+            layer = detect_layer(user_input)
+        # Для остальных режимов слой не используется.
         else:
-            # Сообщаем о недоступности команды.
-            print(f"[Команда] /layers недоступна в режиме memory={args.memory}\n")
-        # Переходим к следующей итерации цикла.
-        continue
+            # Слой не определён (не используется в этом режиме).
+            layer = None
 
-    # Обрабатываем команду /layer — только для layered.
-    if user_input.startswith("/layer "):
-        # Проверяем доступность команды в текущем режиме.
+        # Добавляем новое сообщение пользователя в активную историю.
         if args.memory == "layered":
-            # Разбиваем команду на части и вызываем обработчик.
-            cmd_layer(full_history, user_input.split())
-        # В остальных режимах команда недоступна.
+            # Для layered добавляем сообщение со слоем и временем.
+            full_history.append(
+                {
+                    # Роль сообщения — пользователь.
+                    "role": "user",
+                    # Текст сообщения.
+                    "content": user_input,
+                    # Определённый слой приоритета.
+                    "layer": layer,
+                    # Текущая дата и время.
+                    "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                }
+            )
+        # Для session и compressed — без слоя.
         else:
-            # Сообщаем о недоступности команды.
-            print(f"[Команда] /layer недоступна в режиме memory={args.memory}\n")
-        # Переходим к следующей итерации цикла.
-        continue
-
-    # Обрабатываем команду /clear — доступна во всех режимах.
-    if user_input == "/clear":
-        # Очищаем активную историю (лог-файл при этом сохраняется).
-        full_history = []
-        # Очищаем архив свёрнутых сообщений.
-        archived = []
-        # Для compressed и layered сбрасываем и саммари.
-        if args.memory in ("compressed", "layered"):
-            # Сбрасываем саммари в памяти.
-            summary = ""
-        # Сообщаем пользователю об очистке.
-        print("[Контекст] Контекст очищен (лог-файл сохранён)\n")
-        # Переходим к следующей итерации цикла.
-        continue
-
-    # Обрабатываем команду /exit — доступна во всех режимах.
-    if user_input == "/exit":
-        # Для compressed и layered сохраняем саммари в файл.
-        if args.memory in ("compressed", "layered") and summary:
-            # Сохраняем актуальное саммари в файл.
-            save_compressed_summary(summary)
-            # Сообщаем пользователю, что саммари сохранено.
-            print(f"[Память] Саммари сохранено: {SUMMARY_FILE}")
-        # Сообщаем пользователю, что лог сохранён.
-        print(f"[Память] Лог сохранён: {LOG_FILE}")
-        # Прерываем бесконечный цикл и завершаем программу.
-        break
-
-    # Проверяем, осталась ли строка пустой после удаления пробелов.
-    if not user_input:
-        # Пропускаем текущую итерацию и снова ожидаем пользовательский ввод.
-        continue
-
-    # Для layered-памяти определяем слой сообщения пользователя по маркерам.
-    if args.memory == "layered":
-        # Автоматически определяем слой сообщения.
-        layer = detect_layer(user_input)
-    # Для остальных режимов слой не используется.
-    else:
-        # Слой не определён (не используется в этом режиме).
-        layer = None
-
-    # Добавляем новое сообщение пользователя в активную историю.
-    if args.memory == "layered":
-        # Для layered добавляем сообщение со слоем и временем.
-        full_history.append(
-            {
-                # Роль сообщения — пользователь.
-                "role": "user",
-                # Текст сообщения.
-                "content": user_input,
-                # Определённый слой приоритета.
-                "layer": layer,
-                # Текущая дата и время.
-                "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            }
-        )
-    # Для session и compressed — без слоя.
-    else:
-        # Добавляем сообщение с ролью, текстом и временем.
-        full_history.append(
-            {
-                # Роль сообщения — пользователь.
-                "role": "user",
-                # Текст сообщения.
-                "content": user_input,
-                # Текущая дата и время.
-                "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            }
-        )
-
-    # Формируем messages для запроса через диспетчер стратегий контекста.
-    messages = build_messages(args.context, full_history, summary, WINDOW)
-
-    # Отправляем запрос к LLM и получаем ответ (или None при ошибке).
-    bot_response = ask_llm(messages)
-
-    # Если ответа нет (ошибка API) — удаляем сообщение пользователя и продолжаем.
-    if bot_response is None:
-        # Удаляем последнее сообщение пользователя, на которое модель не ответила.
-        full_history.pop()
-        # Переходим к следующей итерации цикла.
-        continue
-
-    # Добавляем ответ модели в активную историю.
-    if args.memory == "layered":
-        # Для layered ответ наследует слой сообщения пользователя.
-        full_history.append(
-            {
-                # Роль сообщения — ассистент.
-                "role": "assistant",
-                # Текст ответа.
-                "content": bot_response,
-                # Слой наследуется от сообщения пользователя.
-                "layer": layer,
-                # Текущая дата и время.
-                "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            }
-        )
-    # Для session и compressed — без слоя.
-    else:
-        # Добавляем ответ с ролью, текстом и временем.
-        full_history.append(
-            {
-                # Роль сообщения — ассистент.
-                "role": "assistant",
-                # Текст ответа.
-                "content": bot_response,
-                # Текущая дата и время.
-                "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            }
-        )
-
-    # Выводим ответ модели и пустую строку для читаемости.
-    print(f"Агент: {bot_response}\n")
-
-    # Дозаписываем обмен (пользователь и агент) в лог-файл.
-    append_log(full_history[-2], layered=(args.memory == "layered"))
-    # Дозаписываем ответ агента в лог-файл.
-    append_log(full_history[-1], layered=(args.memory == "layered"))
-
-    # --- Пост-обработка: вытеснение (A) или автосжатие (B и C) ---------------------
-
-    # Для sliding-window проверяем появление новых вытесненных сообщений.
-    if args.context == "sliding-window":
-        # Считаем, сколько сообщений сейчас вне окна.
-        new_evicted = max(0, len(full_history) - WINDOW)
-
-        # Если количество вытесненных увеличилось — окно сдвинулось.
-        if new_evicted > evicted_count:
-            # Выводим ненавязчивое уведомление о вытеснении.
-            print(
-                f"[Контекст] Сообщение вышло из окна "
-                f"(осталось {WINDOW} последних)\n"
+            # Добавляем сообщение с ролью, текстом и временем.
+            full_history.append(
+                {
+                    # Роль сообщения — пользователь.
+                    "role": "user",
+                    # Текст сообщения.
+                    "content": user_input,
+                    # Текущая дата и время.
+                    "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                }
             )
 
-        # Запоминаем новое количество вытесненных сообщений.
-        evicted_count = new_evicted
+        # Формируем messages для запроса через диспетчер стратегий контекста.
+        messages = build_messages(args.context, full_history, summary, WINDOW)
 
-    # Для compression и leveling проверяем порог автосжатия.
-    else:
-        # Считаем сообщения вне окна оперативного слоя.
-        outside_window = len(full_history) - WINDOW
+        # Отправляем запрос к LLM и получаем ответ (или None при ошибке).
+        bot_response = ask_llm(messages)
 
-        # Если вне окна накопилось >= порога — запускаем автоматическое сжатие.
-        if outside_window >= COMPRESS_THRESHOLD:
-            # Сжимаем все сообщения вне окна (старые), оставляя окно нетронутым.
-            old_messages = full_history[:-WINDOW]
+        # Если ответа нет (ошибка API) — удаляем сообщение пользователя и продолжаем.
+        if bot_response is None:
+            # Удаляем последнее сообщение пользователя, на которое модель не ответила.
+            full_history.pop()
+            # Переходим к следующей итерации цикла.
+            continue
 
-            # Вызываем сжатие через LLM: старое саммари консолидируется.
-            new_summary = compress_history(old_messages, summary)
+        # Добавляем ответ модели в активную историю.
+        if args.memory == "layered":
+            # Для layered ответ наследует слой сообщения пользователя.
+            full_history.append(
+                {
+                    # Роль сообщения — ассистент.
+                    "role": "assistant",
+                    # Текст ответа.
+                    "content": bot_response,
+                    # Слой наследуется от сообщения пользователя.
+                    "layer": layer,
+                    # Текущая дата и время.
+                    "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                }
+            )
+        # Для session и compressed — без слоя.
+        else:
+            # Добавляем ответ с ролью, текстом и временем.
+            full_history.append(
+                {
+                    # Роль сообщения — ассистент.
+                    "role": "assistant",
+                    # Текст ответа.
+                    "content": bot_response,
+                    # Текущая дата и время.
+                    "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                }
+            )
 
-            # Если сжатие удалось — обновляем состояние.
-            if new_summary is not None:
-                # Запоминаем длину нового саммари для уведомления.
-                summary_length = len(new_summary)
+        # Выводим ответ модели и пустую строку для читаемости.
+        print(f"Агент: {bot_response}\n")
 
-                # Сохраняем новое саммари в файл (перезапись целиком).
-                save_compressed_summary(new_summary)
+        # Дозаписываем обмен (пользователь и агент) в лог-файл.
+        append_log(full_history[-2], layered=(args.memory == "layered"))
+        # Дозаписываем ответ агента в лог-файл.
+        append_log(full_history[-1], layered=(args.memory == "layered"))
 
-                # Записываем событие сжатия в лог-файл.
-                log_compression(len(old_messages), summary_length)
+        # --- Пост-обработка: вытеснение (A) или автосжатие (B и C) ---------------------
 
-                # Выводим уведомление о сжатии.
+        # Для sliding-window проверяем появление новых вытесненных сообщений.
+        if args.context == "sliding-window":
+            # Считаем, сколько сообщений сейчас вне окна.
+            new_evicted = max(0, len(full_history) - WINDOW)
+
+            # Если количество вытесненных увеличилось — окно сдвинулось.
+            if new_evicted > evicted_count:
+                # Выводим ненавязчивое уведомление о вытеснении.
                 print(
-                    f"[Сжатие] {len(old_messages)} сообщений свёрнуты в саммари "
-                    f"(длина саммари: {summary_length} символов)\n"
+                    f"[Контекст] Сообщение вышло из окна "
+                    f"(осталось {WINDOW} последних)\n"
                 )
 
-                # Обновляем саммари в памяти.
-                summary = new_summary
+            # Запоминаем новое количество вытесненных сообщений.
+            evicted_count = new_evicted
 
-                # Переносим сжатые сообщения в архив для /history.
-                archived.extend(old_messages)
+        # Для compression и leveling проверяем порог автосжатия.
+        else:
+            # Считаем сообщения вне окна оперативного слоя.
+            outside_window = len(full_history) - WINDOW
 
-                # Удаляем сжатые сообщения из активной истории (они в саммари).
-                del full_history[:len(old_messages)]
-            # Если сжатие не удалось — не теряем сообщения.
-            else:
-                # Сообщаем, что сжатие отложено, сообщения сохранены.
-                print("[Сжатие] Не удалось, сообщения сохранены, попробуем в следующий раз\n")
+            # Если вне окна накопилось >= порога — запускаем автоматическое сжатие.
+            if outside_window >= COMPRESS_THRESHOLD:
+                # Сжимаем все сообщения вне окна (старые), оставляя окно нетронутым.
+                old_messages = full_history[:-WINDOW]
+
+                # Вызываем сжатие через LLM: старое саммари консолидируется.
+                new_summary = compress_history(old_messages, summary)
+
+                # Если сжатие удалось — обновляем состояние.
+                if new_summary is not None:
+                    # Запоминаем длину нового саммари для уведомления.
+                    summary_length = len(new_summary)
+
+                    # Сохраняем новое саммари в файл (перезапись целиком).
+                    save_compressed_summary(new_summary)
+
+                    # Записываем событие сжатия в лог-файл.
+                    log_compression(len(old_messages), summary_length)
+
+                    # Выводим уведомление о сжатии.
+                    print(
+                        f"[Сжатие] {len(old_messages)} сообщений свёрнуты в саммари "
+                        f"(длина саммари: {summary_length} символов)\n"
+                    )
+
+                    # Обновляем саммари в памяти.
+                    summary = new_summary
+
+                    # Переносим сжатые сообщения в архив для /history.
+                    archived.extend(old_messages)
+
+                    # Удаляем сжатые сообщения из активной истории (они в саммари).
+                    del full_history[:len(old_messages)]
+                # Если сжатие не удалось — не теряем сообщения.
+                else:
+                    # Сообщаем, что сжатие отложено, сообщения сохранены.
+                    print("[Сжатие] Не удалось, сообщения сохранены, попробуем в следующий раз\n")
+
+    # Перехватываем Ctrl+D (EOF) — корректный выход без ошибки.
+    except EOFError:
+        # Сообщаем о завершении и прерываем цикл.
+        print("\n[Выход] Ввод завершён (EOF)")
+        break
+
+    # Перехватываем Ctrl+C — корректный выход без traceback.
+    except KeyboardInterrupt:
+        # Сообщаем о прерывании и прерываем цикл.
+        print("\n[Выход] Прервано пользователем")
+        break
+
+    # Перехватываем любую другую непредвиденную ошибку в теле цикла.
+    except Exception as error:
+        # Записываем полный стек ошибки в журнал ошибок.
+        log_error("Ошибка в главном цикле", error)
+        # Просим нажать Enter, чтобы окно не закрылось мгновенно.
+        input("Нажмите Enter для продолжения...")

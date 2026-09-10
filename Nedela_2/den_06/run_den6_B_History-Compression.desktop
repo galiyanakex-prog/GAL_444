@@ -1,3 +1,4 @@
+#!/usr/bin/env xdg-open
 [Desktop Entry]
 Name=День 6 — History Compression
 Comment=Чат-бот со сжатием истории в саммари (вариант B)
