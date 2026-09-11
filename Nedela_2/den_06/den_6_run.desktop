@@ -1,7 +1,7 @@
 [Desktop Entry]
 Name=День 6 — Агент (3-in-1)
 Comment=Чат-бот Дня 6: все техники контекста и памяти через флаги
-Exec=/home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/Nedela_2/den_06/run_den6.sh
+Exec=/home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/Nedela_2/den_06/den_6_run.sh
 Icon=utilities-terminal
 Terminal=true
 Type=Application

@@ -2,7 +2,7 @@
 [Desktop Entry]
 Name=День 6 — History Compression
 Comment=Чат-бот со сжатием истории в саммари (вариант B)
-Exec=/home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/Nedela_2/den_06/run_den6_B_History-Compression.sh
+Exec=/home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/Nedela_2/den_06/den_6_run_B_History-Compression.sh
 Icon=utilities-terminal
 Terminal=true
 Type=Application

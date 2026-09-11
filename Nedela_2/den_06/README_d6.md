@@ -5,12 +5,12 @@
 
 ## Суть проекта
 
-Реализован CLI-чат-бот с LLM (RouterAI, модель `stepfun/step-3.5-flash`), который демонстрирует **три техники управления контекстом** и **три типа памяти**. Каждый вариант — отдельный файл, плюс объединённая версия `Den_6_Kod.py`, где техника и тип памяти выбираются флагами командной строки.
+Реализован CLI-чат-бот с LLM (RouterAI, модель `stepfun/step-3.5-flash`), который демонстрирует **три техники управления контекстом** и **три типа памяти**. Каждый вариант — отдельный файл, плюс объединённая версия `den_6_Kod.py`, где техника и тип памяти выбираются флагами командной строки.
 
 ## Варианты
 
 ### Вариант A — Sliding Window + Session Memory
-Файл: `Den_6_Kod_A_Sliding-Window.py`
+Файл: `den_6_Kod_A_Sliding-Window.py`
 
 - В контекстном окне держатся только последние N сообщений (по умолчанию 10, флаг `--window`);
 - Вытесненные сообщения не теряются: полная история сохраняется в лог `Den_6_log_A_Sliding-Window.md`;
@@ -18,7 +18,7 @@
 - Команды: `/history` (пометки `[в окне]`/`[вытеснено]`), `/window`, `/clear`, `/exit`.
 
 ### Вариант B — History Compression + Compressed Memory
-Файл: `Den_6_Kod_B_History-Compression.py`
+Файл: `den_6_Kod_B_History-Compression.py`
 
 - Старые сообщения не выбрасываются, а сжимаются в саммари отдельным вызовом LLM;
 - Окно `--keep` (по умолчанию 6), порог сжатия — 8 сообщений вне окна;
@@ -27,7 +27,7 @@
 - Команды: `/summary`, `/history` (`[в окне]`/`[вне окна]`/`[в саммари]`), `/compress`, `/clear`, `/exit`.
 
 ### Вариант C — Context-Leveling + Layered Memory
-Файл: `Den_6_Kod_C_Context-Leveling.py`
+Файл: `den_6_Kod_C_Context-Leveling.py`
 
 - Контекст делится на слои: **стратегический** (system prompt + инструкции, не меняется) и **оперативный** (диалог, старое сжимается в саммари);
 - Запрос собирается строго в порядке: стратегия → инструкции → саммари → окно;
@@ -35,18 +35,18 @@
 - Флаг `--load all|high|high,mid|none` выбирает, какие слои подгружать из лога при старте;
 - Команды: `/layers`, `/history`, `/layer <№> <high|mid|low>`, `/summary`, `/compress`, `/clear`, `/exit`.
 
-### Объединённая версия — Den_6_Kod.py (3-in-1)
+### Объединённая версия — den_6_Kod.py (3-in-1)
 Один каркас + подключаемые стратегии (диспетчеризация через if/elif — учебный аналог Strategy pattern):
 
 ```bash
 # Вариант A — Sliding Window + Session Memory
-python den_06/Den_6_Kod.py --context sliding-window --memory session
+python den_06/den_6_Kod.py --context sliding-window --memory session
 
 # Вариант B — History Compression + Compressed Memory
-python den_06/Den_6_Kod.py --context compression --memory compressed
+python den_06/den_6_Kod.py --context compression --memory compressed
 
 # Вариант C — Context-Leveling + Layered Memory
-python den_06/Den_6_Kod.py --context leveling --memory layered
+python den_06/den_6_Kod.py --context leveling --memory layered
 ```
 
 Флаги: `--context`, `--memory`, `--window` (для A, по умолчанию 10), `--keep` (для B/C, по умолчанию 6), `--load` (для layered), `--log` (имя лог-файла, по умолчанию `Den_6_log.md`). Несовместимые комбинации валидируются с автоисправлением и предупреждением `[Конфиг] ...`.
@@ -57,42 +57,42 @@ python den_06/Den_6_Kod.py --context leveling --memory layered
 - Retry при HTTP 429: до 3 попыток, задержка 2 → 4 → 8 сек;
 - Таймаут запроса 30 сек; ошибки API не прерывают цикл;
 - Лог в Markdown: дозапись после каждого обмена (дата, роль, текст; для layered — пометка слоя; для compressed — события сжатия);
-- **Журналирование ошибок:** главный цикл каждой программы обёрнут в `try/except`. Любая непредвиденная ошибка записывается с полным стеком (traceback) в `Den_6_error.log`, выводится краткое сообщение, и программа ждёт нажатия Enter — окно терминала не закрывается молча. `Ctrl+C` и `Ctrl+D` обрабатываются как корректный выход;
+- **Журналирование ошибок:** главный цикл каждой программы обёрнут в `try/except`. Любая непредвиденная ошибка записывается с полным стеком (traceback) в отдельный журнал `den_6_error_*.log` (свой для каждого варианта: `den_6_error_A_Sliding-Window.log`, `den_6_error_B_History-Compression.log`, `den_6_error_C_Context-Leveling.log`, `den_6_error_3in1.log`), выводится краткое сообщение, и программа ждёт нажатия Enter — окно терминала не закрывается молча. `Ctrl+C` и `Ctrl+D` обрабатываются как корректный выход;
 - Стиль: учебный однофайловый скрипт, комментарий почти к каждой строке, без классов и внешних зависимостей кроме `requests` и `python-dotenv`.
 
 ## Запуск
 
 ```bash
 # Вариант A
-./run_den6_A_Sliding-Window.sh            # или: --window 5
+./den_6_run_A_Sliding-Window.sh            # или: --window 5
 
 # Вариант B
-./run_den6_B_History-Compression.sh       # или: --keep 4
+./den_6_run_B_History-Compression.sh       # или: --keep 4
 
 # Вариант C
-./run_den6_C_Context-Leveling.sh          # или: --keep 6 --load high
+./den_6_run_C_Context-Leveling.sh          # или: --keep 6 --load high
 
 # Объединённая версия (выбор режима флагами)
-./run_den6.sh --context leveling --memory layered
+./den_6_run.sh --context leveling --memory layered
 ```
 
-Каждый скрипт активирует виртуальное окружение проекта (`.venv` в корне `AI_9`) и запускает соответствующий файл. Ярлыки `run_den6_*.desktop` дублируют скрипты для запуска из файлового менеджера (для работы в GNOME/KDE ярлыкам нужны права на исполнение: `chmod +x run_den6_*.desktop`).
+Каждый скрипт сам переходит в свою папку (`cd "$(dirname "$0")"`), активирует виртуальное окружение проекта (`.venv` в корне `AI_9`) и запускает соответствующий файл — поэтому `.sh` можно запускать из любого каталога. Ярлыки `den_6_run_*.desktop` дублируют скрипты для запуска из файлового менеджера (для работы в GNOME/KDE ярлыкам нужны права на исполнение: `chmod +x den_6_run_*.desktop`).
 
 ## Файлы проекта
 
 | Файл | Назначение |
 |---|---|
-| `Den_6_Kod_A_Sliding-Window.py` | Вариант A: скользящее окно + session memory |
-| `Den_6_Kod_B_History-Compression.py` | Вариант B: сжатие истории + compressed memory |
-| `Den_6_Kod_C_Context-Leveling.py` | Вариант C: слои контекста + layered memory |
-| `Den_6_Kod.py` | Объединённая версия (все техники через CLI-флаги) |
-| `run_den6_A_Sliding-Window.sh` / `.desktop` | Запуск варианта A |
-| `run_den6_B_History-Compression.sh` / `.desktop` | Запуск варианта B |
-| `run_den6_C_Context-Leveling.sh` / `.desktop` | Запуск варианта C |
-| `run_den6.sh` / `run_den6.desktop` | Запуск объединённой версии |
+| `den_6_Kod_A_Sliding-Window.py` | Вариант A: скользящее окно + session memory |
+| `den_6_Kod_B_History-Compression.py` | Вариант B: сжатие истории + compressed memory |
+| `den_6_Kod_C_Context-Leveling.py` | Вариант C: слои контекста + layered memory |
+| `den_6_Kod.py` | Объединённая версия (все техники через CLI-флаги) |
+| `den_6_run_A_Sliding-Window.sh` / `.desktop` | Запуск варианта A |
+| `den_6_run_B_History-Compression.sh` / `.desktop` | Запуск варианта B |
+| `den_6_run_C_Context-Leveling.sh` / `.desktop` | Запуск варианта C |
+| `den_6_run.sh` / `den_6_run.desktop` | Запуск объединённой версии |
 | `Den_6_log_*.md` | Логи диалогов каждого варианта |
 | `Den_6_summary_*.md` | Саммари (создаются при сжатии) |
-| `Den_6_error.log` | Журнал непредвиденных ошибок (с полным стеком) |
+| `den_6_error_*.log` | Журналы непредвиденных ошибок (свой на каждый вариант, с полным стеком) |
 | `МетаПромт/` | Промты, по которым генерировался код |
 
 ## Результат
@@ -100,4 +100,4 @@ python den_06/Den_6_Kod.py --context leveling --memory layered
 - Три отдельных реализации техник контекста и памяти + объединённая версия с CLI-флагами;
 - История диалога сохраняется и загружается в соответствии с выбранным типом памяти;
 - Обработка ошибок API (retry при 429), структурированный вывод в консоль;
-- Журналирование непредвиденных ошибок в `Den_6_error.log` с защитой от «молчаливого» закрытия окна терминала.
+- Журналирование непредвиденных ошибок в отдельный `den_6_error_*.log` для каждого варианта с защитой от «молчаливого» закрытия окна терминала.

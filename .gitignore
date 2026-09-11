@@ -1,9 +1,9 @@
 # Скрыть файлы с ключами
 .env
+ENV
 
 # Python
 __pycache__/
-*.pyc
 venv/
 .venv/
 .DS_Store/
@@ -16,12 +16,9 @@ lib64/
 # Временные файлы
 check_models.py
 
-# Git
-.git
 
 # Видео
 .mp4
 
 
-# Самри проекта
-.mem
+

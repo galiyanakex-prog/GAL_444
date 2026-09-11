@@ -1,5 +1,5 @@
 # ============================================================================
-# День 6 — Den_6_Kod.py (все три техники через CLI-флаги)
+# День 6 — den_6_Kod.py (все три техники через CLI-флаги)
 #
 # КЛЮЧЕВАЯ ИДЕЯ:
 # Три варианта A/B/C — это три стратегии поверх одного и того же каркаса
@@ -11,9 +11,9 @@
 # if/elif по строке режима, как принято в учебных однофайловых скриптах.
 #
 # Запуск:
-#   python den_06/Den_6_Kod.py --context sliding-window --memory session
-#   python den_06/Den_6_Kod.py --context compression --memory compressed
-#   python den_06/Den_6_Kod.py --context leveling --memory layered
+#   python den_06/den_6_Kod.py --context sliding-window --memory session
+#   python den_06/den_6_Kod.py --context compression --memory compressed
+#   python den_06/den_6_Kod.py --context leveling --memory layered
 # ============================================================================
 
 # 1. Импорты: os, sys, argparse, datetime, requests, dotenv ------------------
@@ -152,11 +152,20 @@ else:
     # Размер окна из флага --keep.
     WINDOW = args.keep
 
-# Имя лог-файла из флага --log.
-LOG_FILE = args.log
+# Каталог этого скрипта: все артефакты (лог, саммари, журнал ошибок) пишутся
+# рядом с кодом, а не туда, откуда запущен скрипт — иначе .sh с cd ../..
+# разложили бы их по корню AI_9.
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-# Имя файла саммари (для compressed и layered памяти).
-SUMMARY_FILE = "Den_6_summary.md"
+# Имя лог-файла из флага --log (если путь относительный — фиксируем его за den_06).
+if os.path.isabs(args.log):
+    LOG_FILE = args.log
+else:
+    LOG_FILE = os.path.join(BASE_DIR, args.log)
+
+# Имя файла саммари (для compressed и layered памяти) — производное от имени лога,
+# чтобы у разных логов не было одного саммари на всех.
+SUMMARY_FILE = os.path.join(BASE_DIR, os.path.splitext(os.path.basename(LOG_FILE))[0] + ".summary.md")
 
 # 4. Константы -----------------------------------------------------------------
 
@@ -197,7 +206,7 @@ REQUEST_TIMEOUT = 30
 RETRY_DELAYS = [2, 4, 8]
 
 # Имя файла журнала ошибок: сюда пишется полный стек любой непредвиденной ошибки.
-ERROR_LOG = "Den_6_error.log"
+ERROR_LOG = os.path.join(BASE_DIR, "den_6_error_3in1.log")
 
 
 # Функция записи непредвиденной ошибки в журнал (с полным стеком вызовов).

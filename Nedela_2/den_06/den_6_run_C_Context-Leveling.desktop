@@ -1,7 +1,7 @@
 [Desktop Entry]
 Name=День 6 — Context-Leveling
 Comment=Чат-бот со слоями контекста и layered memory (вариант C)
-Exec=/home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/Nedela_2/den_06/run_den6_C_Context-Leveling.sh
+Exec=/home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/Nedela_2/den_06/den_6_run_C_Context-Leveling.sh
 Icon=utilities-terminal
 Terminal=true
 Type=Application

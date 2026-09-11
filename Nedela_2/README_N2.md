@@ -23,12 +23,12 @@
 ```text
 Nedela_2/
 ├── den_06/          # Знакомство с агентами LLM, простой флоу работы
-│   ├── Den_3_Kod.py
+│   ├── den_6_Kod.py
 │   ├── README_d6.md
 │   ├── Задание_Д6.txt
 │   ├── Video_d6.txt
-│   ├── run_den6.sh
-│   └── run_den6.desktop
+│   ├── den_6_run.sh
+│   └── den_6_run.desktop
 ├── .env.example
 ├── .gitignore
 ├── N2_audio.txt
@@ -95,7 +95,7 @@ API_KEY=ваш_ключ_от_routerai
 
 Для запуска из файлового менеджера двойным кликом — используйте `.desktop`-ярлыки:
 
-- `den_06/run_den6.desktop`
+- `den_06/den_6_run.desktop`
 
 ### Терминальный запуск
 
@@ -103,10 +103,10 @@ API_KEY=ваш_ключ_от_routerai
 
 ```bash
 # Через скрипт (из корня Nedela_2/)
-./den_06/run_den6.sh
+./den_06/den_6_run.sh
 
 # Или напрямую (с активированным .venv)
-python den_06/Den_3_Kod.py
+python den_06/den_6_Kod.py
 ```
 
 ## Что изучено

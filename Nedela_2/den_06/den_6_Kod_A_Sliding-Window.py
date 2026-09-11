@@ -44,8 +44,12 @@ URL = "https://routerai.ru/api/v1/chat/completions"
 # Модель, через которую идут запросы.
 MODEL = "stepfun/step-3.5-flash"
 
+# Каталог этого скрипта: все файлы-артефакты привязываются к нему, а не к текущему
+# каталогу — иначе .sh с `cd ../..` (рабочий каталог = корень AI_9) писал бы логи туда.
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
 # Имя лог-файла, в который сохраняется полная история диалога.
-LOG_FILE = "Den_6_log_A_Sliding-Window.md"
+LOG_FILE = os.path.join(BASE_DIR, "Den_6_log_A_Sliding-Window.md")
 
 # Заголовки HTTP-запроса: авторизация по ключу и тип данных JSON.
 HEADERS = {
@@ -63,7 +67,7 @@ REQUEST_TIMEOUT = 30
 RETRY_DELAYS = [2, 4, 8]
 
 # Имя файла журнала ошибок: сюда пишется полный стек любой непредвиденной ошибки.
-ERROR_LOG = "Den_6_error.log"
+ERROR_LOG = os.path.join(BASE_DIR, "den_6_error_A_Sliding-Window.log")
 
 
 # Функция записи непредвиденной ошибки в журнал (с полным стеком вызовов).
