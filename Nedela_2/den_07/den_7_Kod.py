@@ -58,7 +58,10 @@ load_dotenv()
 api_key = os.getenv("API_KEY")
 
 # Настраиваем кодировку stdin на UTF-8, чтобы русский текст вводился корректно.
-sys.stdin.reconfigure(encoding='utf-8')
+# errors="replace" — вместо падения (UnicodeDecodeError) при вводе в другой
+# кодировке (например, CP1251 из ярлыка/терминала) «битые» байты заменяются
+# на символ-заглушку, и цикл продолжается.
+sys.stdin.reconfigure(encoding='utf-8', errors='replace')
 
 # Проверяем, удалось ли найти API-ключ.
 if not api_key:
@@ -72,7 +75,7 @@ if not api_key:
 
 # Разбираем аргументы командной строки.
 parser = argparse.ArgumentParser(
-    description="Чат-бот Дня 6: три техники контекста и три типа памяти через флаги."
+    description="Чат-бот Дня 7: сохранение контекста в JSON, три техники контекста и три типа памяти через флаги."
 )
 
 # Флаг --context: техника управления контекстом (по умолчанию sliding-window).
