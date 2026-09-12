@@ -1,0 +1,8 @@
+[Desktop Entry]
+Name=День 8 — Работа с токенами
+Comment=Чат-бот Дня 8: подсчёт токенов запроса, истории и ответа, стоимость диалога и поведение при переполнении контекста
+Exec=/home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/Nedela_2/den_08/den_8_run.sh
+Icon=utilities-terminal
+Terminal=true
+Type=Application
+Categories=Development;
