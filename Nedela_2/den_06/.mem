@@ -333,3 +333,44 @@
 
 **Итого по разделу 13 (на 2026-09-11, после переписывания на класс Agent):** применено — 13.1–13.6, 13.8–13.14; 13.6 — принято как замысел без правок кода; 13.7 — закрыто (класс `Agent` реализован во всех 4 скриптах, см. 13.13).
 
+### 13.15 Стрелки клавиатуры вставляли escape-последовательности в сообщения — ПРИМЕНЕНО
+- Файлы: `den_6_Kod.py`, `den_6_Kod_A_Sliding-Window.py`, `den_6_Kod_B_History-Compression.py`, `den_6_Kod_C_Context-Leveling.py` (все 4), `README_d6.md`
+- Было: без модуля `readline` функция `input()` не интерпретировала escape-последовательности терминала — нажатия стрелок вставлялись в текст сообщения как «[A», «[B», «[C», «[D» и попадали в логи (обнаружено при живом использовании аналогичного кода den_07).
+- Стало: во все 4 скрипта после `import sys` добавлен блок `try: import readline / except ImportError: pass` — стрелки перемещают курсор и листают историю ввода; на платформах без readline (Windows) ввод работает без редактирования, скрипт не падает.
+- Зависимости поправлены: `README_d6.md` — в «Общее для всех вариантов» добавлен пункт «Редактирование ввода» (readline, стандартная библиотека, поведение на платформах без него).
+- Проверка: `py_compile` 4/4 OK; смоук-тесты всех 4 `.sh` (test-key) — EXIT 0; тест с эмуляцией нажатий стрелок (escape-последовательности в stdin через subprocess, den_6_Kod.py) — EXIT 0, regex-проверка лога: «[A/[B/[C/[D» отсутствуют.
+- Статус: ✅ применено
+- Дата: 2026-09-12
+
+### 13.16 UnicodeDecodeError при вводе в не-UTF-8 кодировке — ПРИМЕНЕНО (den_6_Kod.py)
+- Файл: `den_6_Kod.py` (строка `sys.stdin.reconfigure`)
+- Было: `sys.stdin.reconfigure(encoding='utf-8')` без `errors` — при вводе в CP1251 (ярлык/терминал) `input()` падал с `UnicodeDecodeError` (такая ошибка уже фиксировалась 10.09, см. п. 11). Аналогичный дефект исправлен в den_07 (запись 2.7 в den_07/.mem_7).
+- Стало: `sys.stdin.reconfigure(encoding='utf-8', errors='replace')` — «битые» байты заменяются символом-заглушкой, цикл продолжается.
+- Проверка: `py_compile` OK; тест с эмуляцией ввода в CP1251 (байты «привет» в cp1251 через subprocess) — EXIT 0, `UnicodeDecodeError` отсутствует; временный каталог удалён.
+- Статус: ✅ применено
+- Дата: 2026-09-12
+
+### 13.17 UnicodeDecodeError при вводе в не-UTF-8 кодировке — ПРИМЕНЕНО (den_6_Kod_A_Sliding-Window.py)
+- Файл: `den_6_Kod_A_Sliding-Window.py` (строка `sys.stdin.reconfigure`)
+- Было: `sys.stdin.reconfigure(encoding='utf-8')` без `errors` — при вводе в CP1251 `input()` падал с `UnicodeDecodeError` (см. 13.16).
+- Стало: `sys.stdin.reconfigure(encoding='utf-8', errors='replace')` — «битые» байты заменяются символом-заглушкой, цикл продолжается.
+- Проверка: `py_compile` OK; тест с эмуляцией ввода в CP1251 (subprocess) — EXIT 0, `UnicodeDecodeError` отсутствует; временный каталог удалён.
+- Статус: ✅ применено
+- Дата: 2026-09-12
+
+### 13.18 UnicodeDecodeError при вводе в не-UTF-8 кодировке — ПРИМЕНЕНО (den_6_Kod_B_History-Compression.py)
+- Файл: `den_6_Kod_B_History-Compression.py` (строка `sys.stdin.reconfigure`)
+- Было: `sys.stdin.reconfigure(encoding='utf-8')` без `errors` — при вводе в CP1251 `input()` падал с `UnicodeDecodeError` (см. 13.16).
+- Стало: `sys.stdin.reconfigure(encoding='utf-8', errors='replace')` — «битые» байты заменяются символом-заглушкой, цикл продолжается.
+- Проверка: `py_compile` OK; тест с эмуляцией ввода в CP1251 (subprocess) — EXIT 0, `UnicodeDecodeError` отсутствует; временный каталог удалён.
+- Статус: ✅ применено
+- Дата: 2026-09-12
+
+### 13.19 UnicodeDecodeError при вводе в не-UTF-8 кодировке — ПРИМЕНЕНО (den_6_Kod_C_Context-Leveling.py)
+- Файл: `den_6_Kod_C_Context-Leveling.py` (строка `sys.stdin.reconfigure`)
+- Было: `sys.stdin.reconfigure(encoding='utf-8')` без `errors` — при вводе в CP1251 `input()` падал с `UnicodeDecodeError` (см. 13.16).
+- Стало: `sys.stdin.reconfigure(encoding='utf-8', errors='replace')` — «битые» байты заменяются символом-заглушкой, цикл продолжается.
+- Проверка: `py_compile` OK; тест с эмуляцией ввода в CP1251 (subprocess) — EXIT 0, `UnicodeDecodeError` отсутствует; временный каталог удалён.
+- Статус: ✅ применено
+- Дата: 2026-09-12
+
