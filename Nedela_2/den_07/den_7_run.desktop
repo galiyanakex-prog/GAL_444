@@ -1,0 +1,8 @@
+[Desktop Entry]
+Name=День 7 — Сохранение контекста
+Comment=Чат-бот Дня 7: контекст агента сохраняется в JSON и восстанавливается при перезапуске
+Exec=/home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/Nedela_2/den_07/den_7_run.sh
+Icon=utilities-terminal
+Terminal=true
+Type=Application
+Categories=Development;

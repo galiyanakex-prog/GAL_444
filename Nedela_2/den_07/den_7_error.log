@@ -1,0 +1,9 @@
+
+============================================================
+[2026-09-12 19:56:03] Ошибка в главном цикле
+UnicodeDecodeError: 'utf-8' codec can't decode byte 0xd0 in position 57: invalid continuation byte
+Traceback (most recent call last):
+  File "/home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/Nedela_2/den_07/den_7_Kod.py", line 1483, in <module>
+    user_input = input("Вы: ").strip()
+                 ~~~~~^^^^^^^^
+UnicodeDecodeError: 'utf-8' codec can't decode byte 0xd0 in position 57: invalid continuation byte
