@@ -1,0 +1,8 @@
+[Desktop Entry]
+Name=День 9 — Сжатие истории
+Comment=Чат-бот Дня 9: окно «как есть» + автосжатие старой истории в саммари, /compare (качество и расход до/после), /compress on|off
+Exec=/home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/Nedela_2/den_09/den_9_run.sh
+Icon=utilities-terminal
+Terminal=true
+Type=Application
+Categories=Development;
