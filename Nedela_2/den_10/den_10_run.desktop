@@ -1,0 +1,8 @@
+[Desktop Entry]
+Name=День 10 — Стратегии контекста
+Comment=Чат-бот Дня 10: три стратегии управления контекстом (Sliding Window / Sticky Facts / Branching) и сравнение их на одном сценарии
+Exec=/home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/Nedela_2/den_10/den_10_run.sh
+Icon=utilities-terminal
+Terminal=true
+Type=Application
+Categories=Development;
