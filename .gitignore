@@ -15,7 +15,7 @@ lib64/
 
 # Временные файлы
 check_models.py
-
+.kodacli
 
 # Видео
 .mp4
