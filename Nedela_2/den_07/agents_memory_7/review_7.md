@@ -273,7 +273,7 @@
       JSON. Для session оставить. Или изменить
       load_history так, чтобы она не перезаписывала
       full_history, если он уже непустой. Это чище.
-      Рекомендую: в load_history для compressed и layered
+      Рекомендую: в load_history для compresse.mdd и layered
       добавить проверку if self.full_history: return stats
        (не перезаписывать). Но для layered load_history
       также загружает слои из лога, и это может быть

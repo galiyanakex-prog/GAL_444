@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "saved_at": "2026-09-16 14:33:32",
+  "context_strategy": "sliding_window",
+  "memory_type": "session",
+  "window": 10,
+  "full_history": [],
+  "archived": [],
+  "summary": "",
+  "evicted_total": 0
+}

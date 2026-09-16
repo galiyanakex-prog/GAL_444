@@ -30,6 +30,7 @@
 | `/save` | сохранить контекст в JSON сейчас |
 | `/load` | загрузить контекст из JSON |
 | `/clear` | очистить контекст сессии в памяти (JSON на диске не трогается) |
+| `/help` | список команд с пометкой доступности в текущем режиме |
 | `/exit` | сохранить контекст и выйти |
 
 ## Запуск
@@ -45,7 +46,20 @@
 python den_7_Kod.py --context sliding-window --memory session
 ```
 
-Флаги: `--context sliding-window|compression|leveling`, `--memory session|compressed|layered`, `--window` (для sliding-window, по умолчанию 10), `--keep` (для compression/leveling, по умолчанию 6), `--load` (слои для layered), `--log` (имя Markdown-лога, по умолчанию `Den_7_log.md`), `--context-file` (имя JSON-файла контекста, по умолчанию `den_7_context.json`).
+Флаги: `--context sliding-window|compression|leveling`, `--memory session|compressed|layered`, `--window` (для sliding-window, по умолчанию 10), `--keep` (для compression/leveling, по умолчанию 6), `--load` (слои для layered), `--log` (имя Markdown-лога, по умолчанию `Den_7_log.md`), `--context-file` (имя JSON-файла контекста, по умолчанию `den_7_context.json`), `--fresh` (начать новую сессию, не загружая прошлый снимок).
+
+## Сессии и чекпоинты
+
+Снимок JSON — единственный источник истины: при старте состояние восстанавливается
+только из него, Markdown-лог и `.summary.md` читаются только человеком. Отсюда
+семантика ручных операций:
+
+- `/save` — чекпоинт: текущее состояние фиксируется в снимке;
+- `/clear` + `/load` — откат к последнему чекпоинту (`/clear` чистит память, но не диск);
+- `--fresh` — новая сессия: снимок при старте игнорируется, а при ближайшем
+  сохранении (`/save`, `/exit`, Ctrl+C, Ctrl+D`) перезаписывается;
+- явные флаги запуска не перебивают снимок — печатается `[Конфиг] … беру из снимка`;
+  чтобы начать с чистого листа, используйте `--fresh`, а не отдельный `--context-file`.
 
 ## Проверка задания (сценарий из Задание_Д7.txt)
 
