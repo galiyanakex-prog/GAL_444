@@ -3,14 +3,7 @@
 ENV
 
 # Python
-__pycache__/
-venv/
-.venv/
-.DS_Store/
-bin/
-include/
-lib/
-lib64/
+
 
 
 # Временные файлы
