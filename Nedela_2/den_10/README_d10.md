@@ -40,7 +40,8 @@
 | `/window` | состояние окна (sliding-window) |
 | `/layers` / `/layer <№> <слой>` | слои (layered) |
 | `/save` / `/load` | сохранить / загрузить контекст (JSON v4) |
-| `/clear` | очистить контекст сессии |
+| `/clear` | очистить контекст сессии (JSON на диске не трогается) |
+| `/help` | список команд с пометкой доступности в текущем режиме |
 | `/exit` | сохранить контекст и выйти |
 
 ## Запуск
@@ -62,7 +63,7 @@
 ./den_10_run.sh --context leveling --memory layered
 ```
 
-Флаги Дней 6–9 сохранены: `--window`, `--keep`, `--memory`, `--max-context-tokens`, `--max-tokens`, `--token-log`, `--price-in/--price-out`, `--compress-every`, `--summary-word-limit`, `--compress-temperature`.
+Флаги Дней 6–9 сохранены: `--window`, `--keep`, `--memory`, `--max-context-tokens`, `--max-tokens`, `--token-log`, `--price-in/--price-out`, `--compress-every`, `--summary-word-limit`, `--compress-temperature`, `--context-file`, `--log`, `--fresh` (начать новую сессию, игнорируя прошлый JSON-снимок).
 
 ## Механика трёх стратегий
 
@@ -113,6 +114,7 @@ branching:      ~203 токена на последнем запросе; пол
 | `Branches/` | Директория веток (каждая ветка — отдельный JSON-файл) |
 | `den_10_tokens.csv` | CSV-журнал токенов и стоимости |
 | `Den_10_log.md` | Markdown-лог диалога |
+| `Den_10_log.summary.md` | файл саммари (для compressed/layered; для layered — послойными секциями) |
 | `den_10_error.log` | Журнал непредвиденных ошибок |
 | `meta_promt/` | Промты, по которым создавался проект |
 | `Задание_Д10.txt` | Задание дня |
@@ -122,7 +124,7 @@ branching:      ~203 токена на последнем запросе; пол
 - API: RouterAI (OpenAI-совместимый), ключ в `.env` (переменная `API_KEY`);
 - Retry при HTTP 429: до 3 попыток, задержка 2 → 4 → 8 сек; таймаут 30 сек;
 - Ошибки API не прерывают цикл; непредвиденные — в `den_10_error.log` с ожиданием Enter;
-- Уроки устойчивости: `sys.stdin.reconfigure(errors='replace')`, `try: import readline`, пути через `BASE_DIR`;
+- Уроки устойчивости: `sys.stdin.reconfigure(encoding='utf-8', errors='replace')` + `sys.stdout.reconfigure(errors='replace')`, `try: import readline`, пути через `BASE_DIR`;
 - Стиль: учебный однофайловый скрипт, комментарий почти к каждой строке; зависимости — только `requests`, `python-dotenv` и стандартная библиотека.
 
 ## Результат

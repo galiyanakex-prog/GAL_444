@@ -51,12 +51,14 @@ Nedela_2/
 │   ├── den_9_Kod.py
 │   ├── README_d9.md
 │   ├── Задание_Д9.txt
+│   ├── Video_d9.txt
 │   ├── den_9_run.sh
 │   └── den_9_run.desktop
 ├── den_10/          # Управление контекстом: стратегии (Sliding Window / Facts / Branching)
 │   ├── den_10_Kod.py
 │   ├── README_d10.md
 │   ├── Задание_Д10.txt
+│   ├── Video_d10.txt
 │   ├── den_10_run.sh
 │   └── den_10_run.desktop
 ├── .env.example
