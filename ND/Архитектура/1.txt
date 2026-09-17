@@ -1,0 +1,596 @@
+
+как архитектурно организуют внутреннюю структуру в современных ии-агентах? как организуют персанализацию под нескольких пользователей, их права доступа, разветвление диалогов, структуры проектов, правила наследования, полиморфизмы, инкапсуляции?
+
+Современного «единого стандарта» внутренней структуры ИИ-агента нет. На практике его организуют как **многоуровневую систему**, где отдельно живут идентичность и права, состояние диалога, память, инструменты, планирование и выполнение; критические проверки выполняются на серверной стороне, а не доверяются промпту или самому LLM [1].
+
+## Базовая архитектура
+
+Удобно мыслить агентом как несколькими слоями:
+
+```text
+Клиент / API
+    ↓
+Identity + Tenant Context
+    ↓
+Authorization Policy Engine
+    ↓
+Agent Orchestrator
+    ├── Conversation State
+    ├── Memory / Retrieval
+    ├── Planner / Router
+    ├── Tool Executor
+    ├── Model Gateway
+    └── Audit / Observability
+```
+
+### 1. Identity Layer
+
+Сначала определяется **кто действует**:
+
+```text
+User
+ └── Membership
+      └── Organization / Tenant
+           └── Project
+                └── Conversation
+                     └── Agent Run
+```
+
+В запросе обычно передают не просто `user_id`, а контекст:
+
+```json
+{
+  "principal_id": "user_42",
+  "tenant_id": "company_7",
+  "project_id": "project_19",
+  "conversation_id": "thread_81",
+  "request_id": "req_..."
+}
+```
+
+Этот контекст должен проверяться и передаваться между сервисами в подписанном виде. Нельзя позволять агенту самостоятельно выбирать `tenant_id`, чужую беседу или учетные данные инструмента [2].
+
+## Персонализация нескольких пользователей
+
+Персонализацию лучше разделять на несколько уровней, а не складывать всё в один «профиль пользователя».
+
+| Уровень | Примеры данных | Область действия |
+|---|---|---|
+| User profile | язык, стиль ответа | Все проекты пользователя |
+| Organization policy | запрещённые модели, лимиты, требования аудита | Организация |
+| Project context | документы, инструкции, доменные термины | Один проект |
+| Conversation state | текущая задача, история, выбранные решения | Одна ветка диалога |
+| Run state | промежуточный план, вызовы инструментов, результаты | Один запуск агента |
+| Episodic memory | прошлые события и предпочтения | Пользователь или проект |
+| Semantic knowledge | документы и факты | Проект, организация или общая база |
+
+Полезная формула контекста:
+
+```text
+EffectiveContext =
+    SystemPolicy
+  + OrganizationPolicy
+  + ProjectInstructions
+  + UserPreferences
+  + ConversationState
+  + RetrievedKnowledge
+  + CurrentTask
+```
+
+Но это не означает, что всё безусловно объединяется. Каждый фрагмент должен иметь:
+
+```json
+{
+  "content": "...",
+  "scope": "project",
+  "owner": "project_19",
+  "visibility": "members",
+  "source": "user|admin|document|model",
+  "priority": 50,
+  "expires_at": null
+}
+```
+
+Главное правило: **персонализация изменяет поведение агента, но не расширяет права доступа**. Если пользователь не может прочитать документ через обычный API, его нельзя выдавать ему через RAG, память или инструмент поиска.
+
+## Права доступа
+
+Для простых систем подходит RBAC:
+
+```text
+role = project_editor
+permissions = [conversation.read, file.write, agent.run]
+```
+
+Однако в реальных системах обычно нужен гибрид:
+
+- **RBAC** — роль пользователя;
+- **ReBAC** — отношение пользователя к объекту;
+- **ABAC** — атрибуты и условия;
+- **PBAC** — централизованные политики.
+
+Например:
+
+```text
+user:42 member project:19
+project:19 parent organization:7
+document:55 belongs_to project:19
+```
+
+Тогда право можно выразить так:
+
+```text
+can_read(user, document)
+  if user is member of document.project
+```
+
+ReBAC особенно удобно для иерархических объектов: организация → проект → папка → документ → диалог. OpenFGA и системы, вдохновлённые Zanzibar, используют отношения вида «пользователь имеет связь с объектом» и вычисляют разрешения через граф отношений [3][4].
+
+### Проверка должна быть многоуровневой
+
+Проверять доступ нужно перед каждым чувствительным действием:
+
+```text
+API request
+  → can_read(conversation)
+  → retrieve only authorized memories
+  → can_call(tool)
+  → execute tool with scoped credential
+  → can_write(result)
+```
+
+Нельзя ограничиваться проверкой при открытии интерфейса. Агент может позже вызвать поиск, базу данных, файловую систему или внешний API.
+
+Особенно важно разделять:
+
+```text
+Can user see this tool?
+Can agent call this tool?
+Can agent call it with these arguments?
+Can agent access this particular resource?
+Can agent perform this mutation?
+```
+
+Например, право `calendar.use` ещё не означает право отменять встречу директора.
+
+## Диалоги и ветвление
+
+Диалог лучше моделировать не как изменяемый список сообщений, а как **граф версий**:
+
+```text
+Conversation
+ └── Root message
+      ├── Message A
+      │    └── Message B
+      │         └── Message C
+      └── Alternative B'
+           └── Message C'
+```
+
+Минимальная модель:
+
+```text
+conversation
+- id
+- project_id
+- owner_id
+- root_message_id
+- active_branch_id
+
+message
+- id
+- conversation_id
+- parent_id
+- author
+- content
+- created_at
+- visibility
+- metadata
+
+branch
+- id
+- conversation_id
+- fork_message_id
+- label
+```
+
+Ветка должна быть дешёвой операцией: новая ветка ссылается на общего родителя, а не копирует всю историю. При запуске агента система строит lineage:
+
+```text
+root → parent → ... → selected_branch_tip
+```
+
+Это позволяет:
+
+- пробовать разные решения;
+- сравнивать ответы;
+- откатывать ошибочные действия;
+- запускать параллельные гипотезы;
+- делать ревью конкретного поддерева;
+- хранить разные права доступа на ветки.
+
+Следует отдельно хранить **историю сообщений** и **состояние агента**. Сообщение неизменно, а состояние можно пересчитывать или восстанавливать:
+
+```text
+messages → reducer → AgentState
+```
+
+Пример `AgentState`:
+
+```json
+{
+  "goal": "...",
+  "plan": ["...", "..."],
+  "variables": {},
+  "tool_results": [],
+  "pending_approval": null,
+  "status": "waiting_for_user"
+}
+```
+
+## Структура проектов
+
+Проект обычно является главным контейнером контекста и разрешений:
+
+```text
+Organization
+ ├── Users / Groups
+ ├── Policies
+ └── Projects
+      ├── Instructions
+      ├── Conversations
+      ├── Documents
+      ├── Agents
+      ├── Tools
+      ├── Secrets references
+      ├── Memory namespace
+      └── Audit log
+```
+
+У проекта должны быть как минимум:
+
+- собственный namespace данных;
+- список участников и ролей;
+- инструкции агента;
+- разрешённые модели;
+- разрешённые инструменты;
+- лимиты токенов и стоимости;
+- область поиска и памяти;
+- политика подтверждений;
+- журнал действий.
+
+Для изоляции арендаторов применяют раздельные пространства в реляционной базе (SQLite) и vector store, отдельные ключи или схемы для чувствительных клиентов, а учетные данные инструментов хранят в vault с ограничением по tenant/project [2].
+
+## Наследование правил
+
+Наследование удобно использовать для конфигурации:
+
+```text
+Platform
+  → Organization
+    → Project
+      → Agent
+        → Conversation
+          → Run
+```
+
+Но права и инструкции наследуются по-разному.
+
+### Конфигурация
+
+Для настроек можно применять обычное слияние:
+
+```text
+effective_config =
+    merge(platform_config,
+          organization_config,
+          project_config,
+          agent_config,
+          conversation_config)
+```
+
+Типичные стратегии:
+
+- scalar: ближайшее значение заменяет родительское;
+- map: ключи объединяются;
+- list permissions: обычно пересечение или deny-overrides;
+- list tools: явное allow-list;
+- policies: более строгий запрет побеждает;
+- prompts: не простая конкатенация, а структурированные блоки с приоритетом.
+
+### Права
+
+Права не должны наследоваться как обычный JSON-конфиг:
+
+```text
+organization.allow + project.allow = все разрешено
+```
+
+Безопаснее использовать принцип:
+
+```text
+effective_permission =
+    parent_grant
+  ∩ local_grant
+  ∩ global_constraints
+  ∩ contextual_conditions
+```
+
+То есть дочерний объект может сузить доступ, но не должен самовольно расширить глобальную политику. Явный `deny` обычно имеет приоритет над `allow`.
+
+Для каждой настройки полезно хранить происхождение:
+
+```json
+{
+  "model": {
+    "value": "model-x",
+    "source": "project_19",
+    "overridden": false
+  }
+}
+```
+
+Это делает правила объяснимыми и облегчает аудит.
+
+## Полиморфизм
+
+Полиморфизм обычно реализуют не наследованием классов, а стабильными интерфейсами и адаптерами.
+
+### Интерфейс модели
+
+```python
+class ModelProvider:
+    def generate(self, request) -> ModelResponse:
+        raise NotImplementedError
+```
+
+Реализации:
+
+```text
+OpenAIProvider
+AnthropicProvider
+LocalVLLMProvider
+MockProvider
+```
+
+Оркестратор работает с интерфейсом:
+
+```text
+model.generate(request)
+```
+
+### Интерфейс инструмента
+
+```json
+{
+  "name": "search_documents",
+  "input_schema": {},
+  "required_permissions": ["document.read"],
+  "risk_level": "low",
+  "execute": "server_side_handler"
+}
+```
+
+Инструменты могут быть:
+
+- HTTP API;
+- SQL-запросом через безопасный слой;
+- функцией;
+- MCP-сервером;
+- изолированным процессом;
+- подагентом.
+
+Для агента они должны выглядеть одинаково: метаданные, схема аргументов, проверка прав, выполнение, результат, журнал.
+
+### Типы агентов
+
+Можно иметь общий контракт:
+
+```text
+Agent.run(input, context) → RunResult
+```
+
+И реализации:
+
+```text
+ChatAgent
+ResearchAgent
+CodingAgent
+WorkflowAgent
+SupervisorAgent
+```
+
+При этом специализация задаётся конфигурацией и набором инструментов, а не копированием всей логики базового агента.
+
+## Инкапсуляция
+
+Граница инкапсуляции должна проходить по опасным ресурсам:
+
+```text
+Agent
+ ├── не видит секреты напрямую
+ ├── не читает базу напрямую
+ ├── не формирует произвольные SQL-запросы
+ ├── не выбирает tenant самостоятельно
+ └── не выдаёт себе новые права
+```
+
+Вместо этого агент вызывает фасады:
+
+```text
+DocumentService.search(...)
+ToolGateway.execute(...)
+MemoryService.retrieve(...)
+PolicyEngine.check(...)
+SecretBroker.issue_scoped_token(...)
+```
+
+LLM получает только минимально необходимую информацию. Например, вместо API-ключа:
+
+```text
+tool: "github.create_issue"
+credential: "opaque_runtime_handle"
+```
+
+Сам ключ подставляет серверный gateway. Инструмент также должен получать отфильтрованный контекст пользователя и проекта.
+
+## Память и RAG
+
+Память лучше разделять по назначению:
+
+```text
+Working memory       — текущий запуск
+Conversation memory  — история ветки
+User memory          — устойчивые предпочтения
+Project memory       — знания проекта
+Organizational memory— общие правила
+Episodic memory      — события и действия
+```
+
+Каждый объект памяти должен иметь ACL или ссылку на защищённый ресурс. Поиск должен фильтровать данные **до** передачи в модель:
+
+```text
+query vector search
+  → metadata filter by tenant/project/permissions
+  → retrieve authorized chunks
+  → rerank
+  → send to LLM
+```
+
+Фильтровать после генерации уже поздно: модель могла использовать запрещённый документ при построении ответа.
+
+## Подагенты и процессы
+
+Подагенту следует выдавать отдельный контекст:
+
+```text
+Parent agent
+  ├── Researcher: read-only documents
+  ├── Coder: sandboxed workspace
+  └── Reviewer: read-only artifacts
+```
+
+У подагента должны быть:
+
+- собственная сессия;
+- ограниченный набор инструментов;
+- лимит глубины делегирования;
+- отдельный бюджет;
+- отдельный workspace;
+- явный контракт результата.
+
+Некоторые современные агентные среды изолируют контексты подагентов и возвращают родителю только итог или структурированный результат, чтобы промежуточный диалог не разрастался в главном контексте [5].
+
+## Практическая доменная модель
+
+Один из рабочих вариантов:
+
+```text
+Tenant
+User
+Group
+Membership
+Project
+ProjectPolicy
+AgentDefinition
+Conversation
+Branch
+Message
+Run
+ToolDefinition
+ToolCredentialRef
+MemoryItem
+Document
+PermissionTuple
+AuditEvent
+```
+
+Связи:
+
+```text
+Tenant 1──N Project
+User N──N Project
+Project 1──N Conversation
+Conversation 1──N Branch
+Branch 1──N Message
+Message 1──N Run
+Project 1──N MemoryItem
+Project 1──N ToolDefinition
+```
+
+Для каждого ресурса желательно иметь:
+
+```text
+id
+tenant_id
+project_id
+created_by
+visibility
+version
+created_at
+updated_at
+deleted_at
+```
+
+А для каждого запуска:
+
+```text
+run_id
+principal_id
+tenant_id
+project_id
+conversation_id
+branch_id
+policy_snapshot_id
+model_id
+tool_calls
+input_hash
+output_hash
+status
+```
+
+`policy_snapshot_id` особенно полезен: если права проекта изменились после запуска, можно понять, по каким правилам действовал старый запуск.
+
+## Где размещать границы
+
+Хорошее практическое разделение выглядит так:
+
+```text
+Presentation
+  → API / WebSocket / UI
+
+Application
+  → use cases, orchestration, transactions
+
+Domain
+  → Conversation, Project, Agent, Policy, Run
+
+Infrastructure
+  → PostgreSQL, vector DB, queues, model APIs, vault
+
+Security
+  → identity, authorization, audit, isolation
+```
+
+При этом Security не должна быть просто библиотекой внутри агента. Она должна быть обязательной инфраструктурной прослойкой перед:
+
+- чтением и записью данных;
+- retrieval;
+- вызовом инструментов;
+- выдачей секретов;
+- запуском подагентов;
+- изменением прав;
+- выполнением необратимых действий.
+
+Итоговая архитектурная идея такова: **диалоги — это версии графа, проекты — контейнеры контекста и политик, права — отдельный вычисляемый граф отношений, память — набор объектов с областью видимости, а агент — оркестратор, который не владеет напрямую ни данными, ни секретами, ни полномочиями**.
+
+Цитаты:
+[1] Securing the Agent: Vendor-Neutral, Multitenant Enterprise ... https://arxiv.org/html/2605.05287v1
+[2] AI Agent Multi-Tenant Architecture: Isolation, Resource Governance ... https://zylos.ai/research/2026-05-07-ai-agent-multi-tenant-architecture/
+[3] Authorization - Emergence https://docs.emergence.ai/platform/authorization
+[4] Fine-Grained Authorization, ReBAC, ABAC & Zanzibar ... https://openfga.dev/docs/authorization-concepts
+[5] The Design Space of Today's and Future AI Agent Systems https://arxiv.org/html/2604.14228v1
+[6] Learn Authorization | OpenFGA https://openfga.dev/docs/learn
+[7] openfga/openfga | DeepWiki https://deepwiki.com/openfga/openfga
+[8] Relationship-Based Access Control With OpenFGA https://www.session-management.com/advanced-access-control-authorization/relationship-based-access-control-with-openfga/
+[9] embesozzi/keycloak-openfga-workshop | DeepWiki https://deepwiki.com/embesozzi/keycloak-openfga-workshop/1-overview

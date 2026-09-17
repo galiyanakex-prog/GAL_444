@@ -1253,7 +1253,8 @@ class Agent:
         # Возвращаем готовый список сообщений для запроса.
         return messages
 
-    # Стратегия контекста C: стратегия → инструкции → саммари → окно (строгий порядок).
+    # Стратегия контекста C: стратегия → инструкции → послойные саммари →
+    # приоритетный блок вне окна → окно (строгий порядок).
     def _build_messages_leveling(self) -> list:
         # Стратегический слой, сообщение 1 — роль агента.
         messages = [{"role": "system", "content": self.system_prompt}]
@@ -1261,14 +1262,41 @@ class Agent:
         # Стратегический слой, сообщение 2 — общие инструкции (не меняются).
         messages.append({"role": "system", "content": RULES_PROMPT})
 
-        # Оперативный слой, часть 1: саммари старых сообщений (если оно есть).
-        if self.summary:
-            # Саммари едет после инструкций, чтобы агент «помнил» сжатый контекст.
+        # Оперативный слой, часть 1: саммари каждого слоя (если оно непустое).
+        # Порядок — по важности: high, mid, low.
+        for layer in LAYER_ORDER:
+            # Саммари слоя берём из послойного словаря.
+            layer_summary = self.summary_by_layer.get(layer, "")
+            # Пустое саммари слоя в запрос не отправляем.
+            if layer_summary:
+                # Подписываем, из какого слоя саммари, чтобы модель понимала приоритет.
+                messages.append(
+                    {
+                        "role": "system",
+                        "content": f"Саммари более раннего диалога (слой {layer}):\n{layer_summary}",
+                    }
+                )
+
+        # Оперативный слой, часть 2: приоритетный блок — сообщения high/mid,
+        # которые уже вышли из окна, но ещё не свёрнуты в саммари (порог сжатия
+        # не достигнут). Без этого блока важный факт «пропадает» сразу после
+        # вытеснения из окна, хотя leveled-память обещает обратное.
+        priority_messages = [
+            msg
+            for msg in self.full_history[:-self.window]
+            if msg.get("layer") in ("high", "mid")
+        ]
+        # Ограничиваем блок сверху (newest-first), чтобы он не разрастался бесконечно.
+        for msg in priority_messages[-PRIORITY_CAP:]:
+            # Помечаем приоритет прямо в содержании — модель видит вес сообщения.
             messages.append(
-                {"role": "system", "content": f"Саммари более раннего диалога:\n{self.summary}"}
+                {
+                    "role": msg["role"],
+                    "content": f"[приоритет {msg['layer']}] {msg['content']}",
+                }
             )
 
-        # Оперативный слой, часть 2: последние K сообщений диалога.
+        # Оперативный слой, часть 3: последние K сообщений диалога.
         messages.extend(
             # Каждое сообщение превращаем в формат API: только role и content.
             {"role": msg["role"], "content": msg["content"]}
@@ -2320,8 +2348,8 @@ class Agent:
 
         # Для compressed и layered добавляем сведения о саммари.
         if self.memory_type in ("compressed", "layered"):
-            # Дописываем длину саммари в символах.
-            text += f"; саммари: {len(self.summary)} символов"
+            # Дописываем длину саммари в символах (для layered — сумму по слоям).
+            text += f"; саммари: {self.get_summary_length()} символов"
 
         # Для layered добавляем статистику слоёв.
         if self.memory_type == "layered":
@@ -2380,17 +2408,30 @@ class Agent:
         return result
 
     # Текущее саммари — для команды /summary.
+    # Для layered собираем непустые послойные саммари в текст с подписями слоёв.
     def get_summary(self) -> str:
-        # Возвращаем текст саммари (пустая строка, если саммари нет).
+        # layered-память: секции вида «[high] текст» через перевод строки.
+        if self.memory_type == "layered":
+            # Собираем только непустые слои, в порядке важности.
+            parts = [
+                f"[{layer}] {text}"
+                for layer, text in self.summary_by_layer.items()
+                if text
+            ]
+            # Пустой список даёт пустую строку — /summary корректно скажет «пусто».
+            return "\n".join(parts)
+
+        # session/compressed: единое саммари (пустая строка, если саммари нет).
         return self.summary
 
     # Статистика по слоям для команды /layers (только layered):
-    # возвращает словарь {слой: {"total": всего, "in_window": в окне}}.
+    # возвращает словарь {слой: {"total": всего, "in_window": в окне,
+    # "summary_length": длина саммари слоя}}.
     def get_layers_stats(self) -> dict:
         # Индекс первого сообщения, которое ещё попало в окно.
         in_window_from = max(0, len(self.full_history) - self.window)
 
-        # Собираем по каждому слою общее количество и количество в окне.
+        # Собираем по каждому слою количество сообщений и длину саммари.
         return {
             layer: {
                 # Сколько сообщений этого слоя во всей активной истории.
@@ -2401,9 +2442,12 @@ class Agent:
                     for index, msg in enumerate(self.full_history)
                     if index >= in_window_from and msg["layer"] == layer
                 ),
+                # Длина саммари этого слоя в символах (0, если слой не сжат).
+                "summary_length": len(self.summary_by_layer.get(layer, "")),
             }
             for layer in LAYER_ORDER
         }
+
 
     # --- День 10: JSON-персистентность контекста ------------------------------
 
@@ -2425,8 +2469,12 @@ class Agent:
             "full_history": self.full_history,
             # Архив сообщений, свёрнутых в саммари (для compressed/layered).
             "archived": self.archived,
-            # Текст саммари (пустая строка, если сжатия не было).
+            # Текст саммари (пустая строка, если сжатия не было); для layered
+            # остаётся пустым — сжатие идёт в summary_by_layer ниже.
             "summary": self.summary,
+            # Послойные саммари (v4): {слой: текст}. Для layered — источник
+            # сжатого контекста, для остальных режимов — пустой словарь.
+            "summary_by_layer": self.summary_by_layer,
             # Счётчик вытесненных из окна сообщений (для sliding_window).
             "evicted_total": self.evicted_total,
             # День 10: накопительный токен-учёт сессии — чтобы после перезапуска
@@ -2461,9 +2509,29 @@ class Agent:
             json.dump(snapshot, f, ensure_ascii=False, indent=2)
 
     # Загрузка состояния агента из JSON-файла (ядро Дня 10).
-    # Возвращает словарь со статистикой загрузки или None, если файла нет
-    # или он повреждён — в обоих случаях программа продолжает работу.
-    def load_context_json(self, filepath: str):
+    # Принимает флаги запуска (context_strategy, memory_type, window) — они
+    # нужны, чтобы предупредить о расхождении снимка с CLI. Возвращает словарь
+    # со статистикой загрузки или None (нет файла / повреждён / несовместим) —
+    # в любом случае программа продолжает работу.
+    def load_context_json(self, filepath: str, cli_strategy: str = None,
+                          cli_memory: str = None, cli_window: int = None):
+        # Флаг --context приходит в виде «sliding-window», а снимок хранит
+        # внутреннее имя «sliding_window» — приводим для честного сравнения.
+        # Для отображения в предупреждении сохраняем исходную строку флага.
+        cli_strategy_label = cli_strategy
+        # Карта имён флагов CLI → внутренние имена стратегий.
+        strategy_map = {
+            "sliding-window": "sliding_window",
+            "compression": "history_compression",
+            "leveling": "context_leveling",
+            "facts": "facts",
+            "branching": "branching",
+        }
+        # Если флаг передан — приводим его к внутреннему имени.
+        if cli_strategy is not None:
+            # Неизвестное значение оставляем как есть (совпадение не найдётся).
+            cli_strategy = strategy_map.get(cli_strategy, cli_strategy)
+
         # Если файла контекста нет — это нормальная ситуация первого запуска.
         if not os.path.exists(filepath):
             # Сообщаем пользователю и начинаем чистую сессию.
@@ -2484,20 +2552,111 @@ class Agent:
             # Загрузки не было.
             return None
 
+        # Проверяем версию формата. Снимки старее MIN_MIGRATABLE_VERSION не
+        # поднимаем (структура неизвестна); v1–v3 мигрируем в v4 ниже, v5+ — отказ.
+        snapshot_version = snapshot.get("version") if isinstance(snapshot, dict) else None
+        # Снимок без версии или старше минимально поддерживаемой — несовместим.
+        if not isinstance(snapshot_version, int) or snapshot_version < MIN_MIGRATABLE_VERSION:
+            # Сообщаем о несовместимой версии и причине отказа.
+            print(
+                f"[Память] Файл контекста имеет версию {snapshot_version!r}, "
+                f"поддерживается от {MIN_MIGRATABLE_VERSION} до {CONTEXT_VERSION} — "
+                "начинаю новую сессию"
+            )
+            # Файл на диске не трогаем, в лог его тоже не поднимаем.
+            return None
+
+        # Снимок новее текущего формата — не знаем его структуру, отказ.
+        if snapshot_version > CONTEXT_VERSION:
+            # Сообщаем, что снимок сделан более новой версией программы.
+            print(
+                f"[Память] Файл контекста имеет версию {snapshot_version}, "
+                f"ожидается до {CONTEXT_VERSION} — начинаю новую сессию"
+            )
+            # Файл на диске не трогаем, в лог его тоже не поднимаем.
+            return None
+
         # Начинаем блок проверки структуры снимка.
         try:
             # Восстанавливаем режимы и окно из снимка.
-            self.context_strategy = snapshot["context_strategy"]
+            snapshot_strategy = snapshot["context_strategy"]
             # Тип памяти из снимка.
-            self.memory_type = snapshot["memory_type"]
+            snapshot_memory = snapshot["memory_type"]
             # Размер окна из снимка.
-            self.window = snapshot["window"]
+            snapshot_window = snapshot["window"]
+
+            # Валидируем значения из снимка: мусорная стратегия/тип уронили бы
+            # сборку запроса в _build_messages — поэтому отсекаем их здесь.
+            if snapshot_strategy not in KNOWN_STRATEGIES:
+                # Сообщаем о несовместимом значении стратегии.
+                print(
+                    f"[Память] Неизвестный режим контекста в снимке "
+                    f"({snapshot_strategy!r}), начинаю новую сессию"
+                )
+                # Файл не удаляем, в лог его не поднимаем.
+                return None
+
+            # Проверяем тип памяти из снимка по списку известных значений.
+            if snapshot_memory not in KNOWN_MEMORY_TYPES:
+                # Сообщаем о несовместимом значении типа памяти.
+                print(
+                    f"[Память] Неизвестный тип памяти в снимке "
+                    f"({snapshot_memory!r}), начинаю новую сессию"
+                )
+                # Файл не удаляем, в лог его не поднимаем.
+                return None
+
+            # Проверяем размер окна из снимка: ноль/отрицательное сделало бы
+            # окно пустым, а окно-строка сломала бы арифметику.
+            if not isinstance(snapshot_window, int) or snapshot_window < 1:
+                # Сообщаем о некорректном размере окна.
+                print(
+                    f"[Память] Некорректный размер окна в снимке "
+                    f"({snapshot_window!r}), начинаю новую сессию"
+                )
+                # Файл не удаляем, в лог его не поднимаем.
+                return None
+
+            # Предупреждаем о расхождении снимка с флагами CLI: конфигурация
+            # берётся из снимка, а явные флаги запуска игнорируются.
+            if cli_strategy is not None and cli_strategy != snapshot_strategy:
+                # Метка [Конфиг] в том же стиле, что и автоисправление флагов.
+                print(
+                    f"[Конфиг] Режим контекста из снимка ({snapshot_strategy}) "
+                    f"отличается от флага --context ({cli_strategy_label}) — беру из снимка"
+                )
+            if cli_memory is not None and cli_memory != snapshot_memory:
+                # Предупреждение о расхождении типа памяти.
+                print(
+                    f"[Конфиг] Тип памяти из снимка ({snapshot_memory}) "
+                    f"отличается от флага --memory ({cli_memory}) — беру из снимка"
+                )
+            if cli_window is not None and cli_window != snapshot_window:
+                # Предупреждение о расхождении размера окна.
+                print(
+                    f"[Конфиг] Размер окна из снимка ({snapshot_window}) "
+                    f"отличается от флага запуска ({cli_window}) — беру из снимка"
+                )
+
+            # Применяем проверенную конфигурацию из снимка.
+            self.context_strategy = snapshot_strategy
+            # Тип памяти из снимка.
+            self.memory_type = snapshot_memory
+            # Размер окна из снимка.
+            self.window = snapshot_window
 
             # Восстанавливаем историю: каждая запись должна быть словарём
             # с role и content; timestamp может отсутствовать в старых снимках.
             restored_history = []
+            # Для layered фильтруем слои по --load уже здесь: источник истины —
+            # снимок, а не Markdown-лог.
+            chosen = self._parse_load_layers(self.load_layers)
             # Перебираем записи активной истории из снимка.
             for msg in snapshot.get("full_history", []):
+                # Запись обязана быть словарём; иначе структура несовместима.
+                if not isinstance(msg, dict):
+                    # Прерываем восстановление — снимок битый.
+                    raise TypeError("запись full_history не является словарём")
                 # Копируем запись как есть — формат совпадает с внутренним.
                 entry = dict(msg)
                 # Если timestamp потерялся — ставим время загрузки.
@@ -2508,6 +2667,10 @@ class Agent:
                 if self.memory_type == "layered" and "layer" not in entry:
                     # Автоопределение слоя по тексту сообщения.
                     entry["layer"] = detect_layer(entry["content"])
+                # Для layered пропускаем сообщения, чей слой не выбран --load.
+                if self.memory_type == "layered" and entry.get("layer") not in chosen:
+                    # Слой исключён флагом --load — в контекст не попадает.
+                    continue
                 # Добавляем восстановленную запись в историю.
                 restored_history.append(entry)
 
@@ -2526,6 +2689,24 @@ class Agent:
 
             # Восстанавливаем саммари (пустая строка, если его не было).
             self.summary = snapshot.get("summary", "")
+
+            # Восстанавливаем послойные саммари (v4). Для снимков v1–v3 ключа
+            # нет — мигрируем: прежнее единое саммари относим в low.
+            snapshot_sbl = snapshot.get("summary_by_layer")
+            if snapshot_version < 4 or not isinstance(snapshot_sbl, dict):
+                # Свежий словарь пустых послойных саммари.
+                self.summary_by_layer = {layer: "" for layer in LAYER_ORDER}
+                # Единое саммари v1–v3 переезжает в low-слой (при его наличии).
+                if snapshot_sbl is None and self.memory_type == "layered":
+                    self.summary_by_layer["low"] = self.summary
+                    # Для layered-памяти уведомляем о миграции снимка.
+                    print("[Память] Старый снимок мигрирован в v4 (саммари перенесено в слой low)")
+            else:
+                # v4: поднимаем послойные саммари, дополняя недостающие слои пустым.
+                self.summary_by_layer = {
+                    layer: (snapshot_sbl.get(layer, "") if isinstance(snapshot_sbl.get(layer, ""), str) else "")
+                    for layer in LAYER_ORDER
+                }
 
             # Восстанавливаем счётчик вытесненных сообщений.
             self.evicted_total = snapshot.get("evicted_total", 0)
@@ -2571,6 +2752,10 @@ class Agent:
                     "total_tokens": 0,
                     "requests": 0,
                 }
+
+            # usage последнего обмена не держим между сессиями — в новой сессии
+            # «токены текущего запроса» узнаем только после первого обмена.
+            self.last_usage = {}
 
             # День 10 (v3): восстанавливаем настройки сжатия из снимка, но НЕ затираем
             # то, что пользователь явно задал флагом запуска: приоритет такой —
@@ -2653,12 +2838,9 @@ class Agent:
                             }
 
             # Если снимок старше текущего формата — предупреждаем, но НЕ падаем:
-            # недостающие поля (v1 — usage, v2 — настройки сжатия Дня 10) подставляются
-            # дефолтами, диалог продолжается.
-            snapshot_version = snapshot.get("version", 1)
+            # недостающие поля подставляются дефолтами, диалог продолжается.
             if snapshot_version < CONTEXT_VERSION:
-                # Сообщение не критичное: диалог продолжается, просто часть
-                # накопленных данных прошлой сессии неизвестна.
+                # Сообщение не критичное: диалог продолжается.
                 print(
                     f"[Память] Снимок старого формата (v{snapshot_version}, "
                     f"текущий v{CONTEXT_VERSION}): недостающие поля возьму по умолчанию, "
@@ -2675,17 +2857,48 @@ class Agent:
             self.archived = []
             # Саммари пустое.
             self.summary = ""
+            # Послойные саммари тоже пустые.
+            self.summary_by_layer = {layer: "" for layer in LAYER_ORDER}
             # Счётчик вытеснений обнулён.
             self.evicted_total = 0
-            # Загрузки не было.
+            # Токен-учёт сбрасываем, чтобы «залипшие» старые токены не выдавали
+            # себя за стоимость текущей (битой) сессии.
+            self.usage_total = {
+                "prompt_tokens": 0,
+                "completion_tokens": 0,
+                "total_tokens": 0,
+                "requests": 0,
+            }
+            self.summary_usage = {
+                "prompt_tokens": 0,
+                "completion_tokens": 0,
+                "total_tokens": 0,
+                "requests": 0,
+            }
+            self.facts_usage = {
+                "prompt_tokens": 0,
+                "completion_tokens": 0,
+                "total_tokens": 0,
+                "requests": 0,
+            }
+            self.last_usage = {}
+            self.exchanges = 0
+            self.saved_count = 0
+            # Файл на диске и Markdown-лог не трогаем: там может оставаться
+            # читаемая история, которую пользователь спасёт вручную.
             return None
+
+        # Снимок и Markdown-лог ведутся параллельно (оба сохраняются при /exit),
+        # поэтому считаем восстановленную историю уже записанной в лог: иначе
+        # ближайший /exit дозаписал бы её повторно и получились бы дубли.
+        self.saved_count = len(self.full_history)
 
         # Собираем статистику загрузки для сообщения пользователю.
         stats = {
             # Сколько сообщений восстановлено в активную историю.
             "loaded": len(self.full_history),
-            # Длина восстановленного саммари в символах.
-            "summary_length": len(self.summary),
+            # Длина восстановленного саммари в символах (для layered — сумма по слоям).
+            "summary_length": self.get_summary_length(),
         }
 
         # Возвращаем статистику вызывающему коду (главный цикл её печатает).
@@ -2721,6 +2934,23 @@ def log_compression(n, length):
             f"> 🔧 [{datetime.now().strftime('%H:%M:%S')}] "
             f"Сжатие: {n} сообщений → саммари ({length} символов)\n"
         )
+
+
+# Информационная функция: предупреждение о Markdown-логе прошлой сессии.
+# Вызывается ТОЛЬКО когда JSON-снимок не восстановлен — иначе сообщение
+# противоречило бы факту («контекст восстановлен» + «сессия новая»).
+def notify_old_log(filepath):
+    # Лога нет — предупреждать не о чем.
+    if not os.path.exists(filepath):
+        # Просто выходим.
+        return
+
+    # Сообщаем, что лог найден, но состояние из него не поднимается:
+    # источник истины — JSON-снимок, лог нужен человеку.
+    print(
+        f"[Память] Найден прошлый лог: {filepath} "
+        "(в контекст не загружается — состояние восстанавливается только из JSON-снимка)"
+    )
 
 
 # 9. Обработчики команд CLI (с проверкой доступности) ----------------------------
@@ -2883,8 +3113,12 @@ def cmd_layers(agent):
 
     # Перебираем слои в порядке важности: high, mid, low.
     for layer in LAYER_ORDER:
-        # Печатаем статистику слоя: всего и сколько из них в окне.
-        print(f"[Слои] {layer}={stats[layer]['total']} (в окне: {stats[layer]['in_window']})")
+        # Печатаем статистику слоя: всего, в окне и длину саммари слоя.
+        print(
+            f"[Слои] {layer}={stats[layer]['total']} "
+            f"(в окне: {stats[layer]['in_window']}, "
+            f"саммари: {stats[layer]['summary_length']} символов)"
+        )
 
     # После статистики печатаем пустую строку для читаемости.
     print()
@@ -2917,14 +3151,93 @@ def cmd_layer(agent, parts):
         # Выходим из обработчика.
         return
 
-    # Находим изменённое сообщение, чтобы показать результат пользователю.
-    user_messages = [msg for msg in agent.get_history() if msg["role"] == "user"]
+    # Текст изменённого сообщения берём у агента по той же нумерации, что и
+    # в set_layer (активная история, 1 — последнее сообщение пользователя).
+    # Раньше здесь использовался get_history() (архив + активные) — после
+    # сжатия номер указывал на чужое/архивное сообщение.
+    changed_text = agent.get_user_message(number)
 
-    # Берём сообщение пользователя по номеру (1 — последнее).
-    target = user_messages[-number]
+    # Если сообщение вдруг не найдено (краевой случай) — сообщаем об этом.
+    if changed_text is None:
+        # Сообщаем о недоступном номере.
+        print(f"[Слой] Нет сообщения пользователя с номером {number}\n")
+        # Выходим из обработчика.
+        return
 
     # Сообщаем пользователю об успешной смене слоя.
-    print(f"[Слой] Сообщение изменено: {target['content'][:50]} → {parts[2]}\n")
+    print(f"[Слой] Сообщение изменено: {changed_text[:50]} → {parts[2]}\n")
+
+
+
+# Обработчик /help: список команд с пометкой доступности в текущем режиме.
+def cmd_help(agent, args):
+    # Печатаем заголовок справки.
+    print("[Справка] Доступные команды:")
+
+    # /history — доступна во всех режимах.
+    print("  /history — показать историю диалога (все режимы)")
+
+    # /window — только для sliding-window.
+    if args.context == "sliding-window":
+        print("  /window — параметры окна контекста (sliding-window)")
+    else:
+        print("  /window — недоступна в текущем режиме контекста")
+
+    # /summary — для compressed и layered.
+    if args.memory in ("compressed", "layered"):
+        print("  /summary — показать текущее саммари (compressed/layered)")
+    else:
+        print("  /summary — недоступна в режиме memory=session")
+
+    # /compress — для compressed и layered.
+    if args.memory in ("compressed", "layered"):
+        print("  /compress — принудительно сжать историю в саммари (compressed/layered)")
+    else:
+        print("  /compress — недоступна в режиме memory=session")
+
+    # /compare — для compressed и layered (День 9).
+    if args.memory in ("compressed", "layered"):
+        print("  /compare — качество и расход до/после сжатия (compressed/layered)")
+    else:
+        print("  /compare — недоступна в режиме memory=session")
+
+    # /compare-strategies — во всех режимах (День 10).
+    print("  /compare-strategies — сценарий «ТЗ» на 3 стратегиях (все режимы)")
+
+    # /facts — только в режиме facts.
+    if args.context == "facts":
+        print("  /facts — текущий блок фактов (facts)")
+    else:
+        print("  /facts — недоступна в текущем режиме контекста")
+
+    # /branch — только в режиме branching.
+    if args.context == "branching":
+        print("  /branch list|switch <имя>|new <имя> — управление ветками (branching)")
+    else:
+        print("  /branch — недоступна в текущем режиме контекста")
+
+    # /layers и /layer — только для layered.
+    if args.memory == "layered":
+        print("  /layers — статистика слоёв (layered)")
+        print("  /layer <номер> <high|mid|low> — сменить приоритет сообщения (layered)")
+    else:
+        print(f"  /layers — недоступна в режиме memory={args.memory}")
+        print(f"  /layer — недоступна в режиме memory={args.memory}")
+
+    # /save и /load — JSON-операции, доступны во всех режимах.
+    print("  /save — сохранить контекст в JSON-снимок (все режимы)")
+    print("  /load — восстановить контекст из JSON-снимка (все режимы)")
+
+    # Токен-команды — во всех режимах.
+    print("  /tokens — три счётчика токенов и локальная оценка (все режимы)")
+    print("  /cost — стоимость обмена, сессии и прогноз (все режимы)")
+    print("  /scenario — сравнение трёх сценариев расхода (все режимы)")
+
+    # /clear, /help, /exit — доступны во всех режимах.
+    print("  /clear — очистить контекст (все режимы)")
+    print("  /help — эта справка (все режимы)")
+    print("  /exit — завершить работу (все режимы)")
+    print()
 
 
 # Обработчик /compress: принудительное сжатие (для compression и leveling).
@@ -3096,18 +3409,20 @@ def cmd_tokens(agent):
     # Локальная оценка ПОСЛЕДНЕГО сообщения пользователя: показывает, сколько токенов
     # добавит следующая отправка (до того, как деньги спишутся). Это прогноз, а не
     # авторитетная цифра: авторитет — usage из ответа API.
-    if agent.full_history:
-        # Берём последнее сообщение истории.
-        last = agent.full_history[-1]
+    # Берём именно сообщение пользователя (агент считает его по full_history), а не
+    # последнюю запись истории — иначе после обмена оценка дала бы ответ модели.
+    last_user = agent.get_user_message(1) if agent.full_history else None
 
+    # Есть ли сообщение пользователя для оценки.
+    if last_user is not None:
         # Оцениваем его текст локально.
-        local = estimate_tokens(last.get("content", ""))
+        local = estimate_tokens(last_user)
 
         # Печатаем оценку с пометкой «локальная».
         print(f"[Токены] Локальная оценка последнего сообщения: ~{local}")
     # Пустая история — оценивать нечего.
     else:
-        # Сообщаем, что история пуста.
+        # Сообщаем, что истории (или реплик пользователя) нет.
         print("[Токены] История пуста — локальная оценка нечего считать")
 
     # Пустая строка для читаемости.
@@ -3399,8 +3714,13 @@ def cmd_cost(agent):
 
 # Обработчик /load: ручная загрузка контекста из JSON (День 10).
 def cmd_load_context(agent):
-    # Загрузку выполняет агент; он же обрабатывает отсутствие/повреждение файла.
-    stats = agent.load_context_json(CONTEXT_FILE)
+    # Передаём флаги запуска, чтобы агент предупредил о расхождении снимка.
+    stats = agent.load_context_json(
+        CONTEXT_FILE,
+        cli_strategy=agent.context_strategy,
+        cli_memory=agent.memory_type,
+        cli_window=agent.window,
+    )
 
     # Если загрузка не состоялась — сообщение уже напечатал агент.
     if stats is None:
@@ -3415,16 +3735,25 @@ def cmd_load_context(agent):
 
 
 
+
 # 10. Главный цикл -----------------------------------------------------------------
 
 # Заголовок лог-файла: создаём файл с шапкой, если его ещё нет.
+# Оборачиваем в try: сбой создания (нет прав/каталога) не должен валить
+# программу до первого ввода — сообщаем об ошибке и продолжаем работу.
 if not os.path.exists(LOG_FILE):
-    # Открываем файл на запись (создаём новый) с кодировкой UTF-8.
-    with open(LOG_FILE, "w", encoding="utf-8") as f:
-        # Пишем заголовок с режимами и размером окна.
-        f.write(
-            f"# Лог диалога — День 10 (контекст={args.context}, память={args.memory}, окно={WINDOW})\n\n"
-        )
+    # Пробуем создать файл с шапкой.
+    try:
+        # Открываем файл на запись (создаём новый) с кодировкой UTF-8.
+        with open(LOG_FILE, "w", encoding="utf-8") as f:
+            # Пишем заголовок с режимами и размером окна.
+            f.write(
+                f"# Лог диалога — День 10 (контекст={args.context}, память={args.memory}, окно={WINDOW})\n\n"
+            )
+    # Сбой создания лога не критичен: пишем в журнал и продолжаем.
+    except OSError as error:
+        # Фиксируем ошибку в журнале ошибок.
+        log_error("Не удалось создать лог-файл", error)
 
 # Создаём агента: он один отвечает за стратегии контекста, память и запросы к API.
 agent = Agent(
@@ -3449,9 +3778,23 @@ print(f"[Режим] контекст={args.context}, память={args.memory}
 
 # --- День 10: автозагрузка контекста из JSON (до приветствия) ---------------
 # Выполняется для ВСЕХ режимов памяти — в этом смысл дня: агент продолжает
-# диалог так, как будто не выключался. Markdown-лог (load_history) при этом
-# ведёт себя как в Дне 6 (зависит от memory_type) — он человекочитаемая копия.
-context_stats = agent.load_context_json(CONTEXT_FILE)
+# диалог так, как будто не выключался. Передаём флаги запуска, чтобы агент
+# предупредил, если снимок перезаписывает конфигурацию CLI.
+# Флаг --fresh отключает загрузку: пользователь явно попросил новую сессию.
+if args.fresh:
+    # Загрузку не делаем, файл на диске не трогаем — он будет перезаписан
+    # при ближайшем сохранении (/save, /exit, Ctrl+C, Ctrl+D).
+    print("[Память] Флаг --fresh: начинаю новую сессию, прошлый снимок игнорируется")
+    # Статистика загрузки отсутствует — сессия чистая.
+    context_stats = None
+else:
+    # Обычный старт: поднимаем состояние из JSON-снимка.
+    context_stats = agent.load_context_json(
+        CONTEXT_FILE,
+        cli_strategy=args.context,
+        cli_memory=args.memory,
+        cli_window=WINDOW,
+    )
 
 # Если контекст восстановлен — печатаем статистику загрузки.
 if context_stats is not None:
@@ -3460,14 +3803,16 @@ if context_stats is not None:
         f"[Память] Контекст восстановлен: {context_stats['loaded']} сообщений "
         f"(саммари: {context_stats['summary_length']} символов)"
     )
-
-# Загружаем память прошлой сессии из Markdown-лога (поведение зависит от memory_type).
-agent.load_history(LOG_FILE)
+# Если снимок НЕ восстановлен (первый запуск / --fresh / битый файл) и при этом
+# в каталоге лежит Markdown-лог прошлой сессии — честно предупреждаем: лог есть,
+# но в контекст он не поднимается. Единственный источник истины — JSON-снимок,
+# Markdown-лог читается только человеком.
+else:
+    notify_old_log(LOG_FILE)
 
 # Для layered-памяти показываем статистику загрузки слоёв.
-if args.memory == "layered":
-    # Повторно получаем статистику: load_history вернул её при вызове выше,
-    # но для читаемости пересчитываем по текущему состоянию агента.
+if agent.memory_type == "layered":
+    # Повторно получаем статистику: она отражает состояние после JSON-снимка.
     stats = agent.get_layers_stats()
 
     # Определяем, какие слои были пропущены (не выбраны флагом --load).
@@ -3502,17 +3847,24 @@ GREETING = "Привет! Я ваш помощник. Чем могу помоч
 print(f"Агент: {GREETING}\n")
 
 # Дозаписываем приветствие в лог с отметкой времени.
-with open(LOG_FILE, "a", encoding="utf-8") as f:
-    # Пишем разделитель с текущими датой и временем.
-    f.write(f"\n## {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
-    # Для layered-памяти пишем приветствие с пометкой слоя low.
-    if args.memory == "layered":
-        # Пишем приветствие как реплику агента с нейтральным слоем low.
-        f.write(f"**Агент** [low]: {GREETING}\n")
-    # Для остальных режимов — обычная строка.
-    else:
-        # Пишем приветствие как реплику агента.
-        f.write(f"**Агент:** {GREETING}\n")
+# Оборачиваем в try: сбой записи (нет прав/диск) не должен валить программу
+# до первого ввода — сообщаем об ошибке и продолжаем работу.
+try:
+    with open(LOG_FILE, "a", encoding="utf-8") as f:
+        # Пишем разделитель с текущими датой и временем.
+        f.write(f"\n## {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+        # Для layered-памяти пишем приветствие с пометкой слоя low.
+        if args.memory == "layered":
+            # Пишем приветствие как реплику агента с нейтральным слоем low.
+            f.write(f"**Агент** [low]: {GREETING}\n")
+        # Для остальных режимов — обычная строка.
+        else:
+            # Пишем приветствие как реплику агента.
+            f.write(f"**Агент:** {GREETING}\n")
+# Сбой записи приветствия не критичен: пишем в журнал и продолжаем.
+except OSError as error:
+    # Фиксируем ошибку в журнале ошибок.
+    log_error("Не удалось записать приветствие в лог", error)
 
 # Выводим шапку программы: название, режимы, окно и имена файлов.
 print(f"🤖 Чат-бот — День 10 (контекст={args.context}, память={args.memory}, окно={WINDOW})")
@@ -3525,12 +3877,13 @@ if args.context == "branching":
 print(f"Лог: {LOG_FILE}")
 print(f"Контекст (JSON): {CONTEXT_FILE}")
 print("Команды: /history /window /summary /compress [on|off] /compare /layers /layer "
-      "/facts /branch /compare-strategies /save /load /tokens /cost /scenario /clear /exit")
+      "/facts /branch /compare-strategies /save /load /tokens /cost /scenario /clear /help /exit")
 print("Сжатие на лету: /compress on (саммари+окно) | /compress off (окно как есть).")
 print("Сравнение до/после сжатия: /compare (качество ответов + экономия токенов/₽).")
 print("Факты (режим facts): /facts — текущий блок фактов.")
 print("Ветки (режим branching): /branch list | /branch switch <имя> | /branch new <имя>.")
 print("Введите /exit для завершения.\n")
+
 
 # Запускаем бесконечный цикл, чтобы пользователь мог отправлять много сообщений.
 # Весь цикл обёрнут в try/except: любая непредвиденная ошибка пишется в журнал,
@@ -3550,6 +3903,31 @@ while True:
 
         # Показываем приглашение, читаем ввод и удаляем пробелы по краям.
         user_input = input(prompt).strip()
+
+        # Любая строка, начинающаяся с «/», обязана быть известной командой.
+        # Без этой проверки опечатка или ещё не реализованная команда
+        # уходила в LLM как обычный текст: модель отвечала прозой, а сама
+        # команда попадала в лог как реплика пользователя.
+        if user_input.startswith("/"):
+            # Команда — первое слово строки (у /layer, /compress, /branch есть аргументы).
+            command = user_input.split()[0]
+
+            # Неизвестную команду обрабатываем на месте, не дёргая API.
+            if command not in KNOWN_COMMANDS:
+                # Говорим, что команда неизвестна, и перечисляем доступные.
+                print(
+                    f"[Команда] Неизвестная команда: {command}. "
+                    f"Доступны: {', '.join(KNOWN_COMMANDS)}\n"
+                )
+                # Переходим к следующему вводу, ничего не отправляя агенту.
+                continue
+
+        # Обрабатываем команду /help — доступна во всех режимах.
+        if user_input == "/help":
+            # Печатаем справку по командам с учётом текущего режима.
+            cmd_help(agent, args)
+            # Переходим к следующей итерации цикла.
+            continue
 
         # Обрабатываем команду /history — доступна во всех режимах.
         if user_input == "/history":
@@ -3672,7 +4050,8 @@ while True:
             continue
 
         # Обрабатываем команду /layer — только для layered.
-        if user_input.startswith("/layer "):
+        # Ловим и «/layer» без аргументов: иначе строка ушла бы в LLM.
+        if user_input == "/layer" or user_input.startswith("/layer "):
             # Проверяем доступность команды в текущем режиме.
             if args.memory == "layered":
                 # Разбиваем команду на части и вызываем обработчик.
@@ -3741,6 +4120,8 @@ while True:
             agent.save_context_json(CONTEXT_FILE)
             # Сообщаем пользователю, что контекст сохранён.
             print(f"[Память] Контекст сохранён: {CONTEXT_FILE}")
+            # Дозаписываем в Markdown-лог всё, что append_log ещё не записал.
+            agent.save_history(LOG_FILE)
             # Сообщаем пользователю, что лог сохранён.
             print(f"[Память] Лог сохранён: {LOG_FILE}")
             # Прерываем бесконечный цикл и завершаем программу.
@@ -3775,6 +4156,10 @@ while True:
         # Дозаписываем ответ агента.
         append_log(history[-1], layered=layered)
 
+        # Сообщаем агенту, что обмен уже лежит в логе: иначе следующий /save
+        # или /exit дозапишет эти же сообщения вторично.
+        agent.mark_saved()
+
     # Перехватываем Ctrl+D (EOF) — корректный выход без ошибки.
     except EOFError:
         # День 10: сохраняем контекст и при выходе по EOF — агент «не выключался».
@@ -3800,4 +4185,10 @@ while True:
         # Записываем полный стек ошибки в журнал ошибок.
         log_error("Ошибка в главном цикле", error)
         # Просим нажать Enter, чтобы окно не закрылось мгновенно.
-        input("Нажмите Enter для продолжения...")
+        # Ctrl+D на этом вводе тоже должен завершать программу корректно.
+        try:
+            input("Нажмите Enter для продолжения...")
+        except EOFError:
+            # Ввод завершён (Ctrl+D) — выходим из цикла без ошибки.
+            print("\n[Выход] Ввод завершён (EOF)")
+            break

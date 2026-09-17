@@ -1,0 +1,524 @@
+3 Как хранить контекст токенов и сбрасывать память в древовидном чате
+
+В древовидном чате важно разделять **полную историю**, **контекст текущего запуска** и **долговременную память**. В базу можно сохранять всю историю веток, но отправлять модели следует только компактный контекст выбранного пути: от корня или checkpoint до текущего сообщения, плюс релевантную память. Контекстное окно ограничивает суммарное число входных, выходных и иногда reasoning-токенов одного запроса [1].
+
+## Три уровня хранения
+
+```text
+1. Immutable history
+   Все сообщения и события дерева.
+
+2. Branch context
+   Контекст выбранной ветки до текущего leaf.
+
+3. Durable memory
+   Пользовательские предпочтения, факты проекта, решения и документы.
+```
+
+Пример:
+
+```text
+Conversation
+├── Message tree
+├── Branch heads
+├── Context snapshots
+├── Summaries
+├── Memory items
+└── Tool events
+```
+
+**История** нужна для аудита и восстановления. **Контекст** — для текущего запроса модели. **Память** — для информации, которую нужно использовать в будущих ветках или разговорах.
+
+## Что хранить в сообщении
+
+```sql
+messages (
+    id              uuid primary key,
+    conversation_id uuid not null,
+    parent_id       uuid,
+    role            text not null,
+    content         jsonb not null,
+    token_count     integer,
+    visibility      jsonb,
+    created_at      timestamp not null
+);
+```
+
+Дополнительно полезно хранить:
+
+```text
+content_hash
+model_id
+generation_params
+tool_call_id
+attachments
+importance
+summary_status
+```
+
+`token_count` лучше вычислять при сохранении. Тогда не придётся каждый раз заново токенизировать всю ветку.
+
+Само сообщение желательно делать неизменяемым. Редактирование создаёт новый узел:
+
+```text
+A → B → C
+    └── B' → C'
+```
+
+## Контекст ветки
+
+Пусть дерево выглядит так:
+
+```text
+M0
+├── M1a → M2a
+└── M1b → M2b → M3b
+```
+
+Если текущий `leaf = M3b`, контекстом является:
+
+```text
+M0 → M1b → M2b → M3b
+```
+
+Для восстановления пути достаточно идти по `parent_id`:
+
+```python
+def ancestors(leaf_id):
+    result = []
+    node = load_message(leaf_id)
+
+    while node is not None:
+        result.append(node)
+        node = load_message(node.parent_id)
+
+    return list(reversed(result))
+```
+
+Но в production-системе не следует каждый раз проходить весь путь до корня. Для длинных веток используются checkpoint и summary.
+
+## Checkpoint контекста
+
+Checkpoint — это сохранённое состояние, от которого можно продолжить ветку:
+
+```sql
+context_checkpoints (
+    id              uuid primary key,
+    conversation_id uuid not null,
+    branch_id       uuid not null,
+    leaf_message_id uuid not null,
+    context_json    jsonb not null,
+    token_count     integer not null,
+    created_at      timestamp not null
+);
+```
+
+Например:
+
+```json
+{
+  "leaf_message_id": "M100",
+  "summary": "Обсудили архитектуру проекта...",
+  "decisions": [
+    "Использовать PostgreSQL",
+    "Инструменты запускать через gateway"
+  ],
+  "open_questions": [
+    "Определить схему авторизации"
+  ],
+  "recent_messages": ["M94", "M95", "M96", "M97", "M98", "M99", "M100"]
+}
+```
+
+При запросе на `M103` система может взять checkpoint на `M100` и добавить только:
+
+```text
+M101 → M102 → M103
+```
+
+Таким образом, стоимость восстановления контекста становится близкой к длине хвоста, а не ко всей истории.
+
+Системы с checkpoint обычно привязывают сохранённое состояние к идентификатору thread или ветки; отдельно могут хранить долговременное состояние, общее для нескольких запусков [2].
+
+## Как обрабатывать ветвление
+
+При создании ветки нужно найти ближайшую общую историю:
+
+```text
+common ancestor = точка развилки
+```
+
+Пример:
+
+```text
+M0 → M1 → M2
+          ├── A1 → A2
+          └── B1 → B2 → B3
+```
+
+Для ветки `B3`:
+
+```text
+1. Найти checkpoint, предшествующий M2.
+2. Взять summary общего префикса.
+3. Добавить M2.
+4. Добавить B1, B2, B3.
+5. Добавить релевантную долговременную память.
+```
+
+Важно: контекст ветки `A` не должен автоматически попадать в ветку `B`. Если нужен обмен результатами, его следует выполнить явно:
+
+```text
+import_result(branch_a, target_branch_b)
+```
+
+Результат лучше импортировать как отдельный структурированный узел:
+
+```json
+{
+  "type": "branch_import",
+  "source_branch": "A",
+  "content": "Ветка A пришла к выводу...",
+  "imported_by": "user_42"
+}
+```
+
+## Три способа сброса
+
+Под «сбросом памяти» могут подразумеваться разные операции.
+
+### Сброс рабочей памяти
+
+Удаляется только временное состояние текущего запуска:
+
+```text
+plan
+scratchpad
+temporary variables
+tool results
+pending actions
+```
+
+История и долговременная память остаются.
+
+```text
+Conversation history: сохраняется
+User memory: сохраняется
+Current run state: очищается
+```
+
+### Сжатие контекста
+
+Старые сообщения не удаляются, а заменяются в рабочем контексте summary:
+
+```text
+M0 ... M70
+   ↓ compaction
+Summary S1 + M71 ... M100
+```
+
+В постоянном хранилище остаются и `M0 ... M70`, и `S1`. Модель получает только:
+
+```text
+S1 → M71 → ... → M100
+```
+
+Компрессия должна сохранять:
+
+- принятые решения;
+- факты и ограничения;
+- нерешённые вопросы;
+- обязательные требования;
+- состояние внешних действий;
+- ссылки на исходные сообщения.
+
+Современные API compaction обычно возвращают новый компактный контекст, который следует использовать как каноническое продолжение, не удаляя произвольно элементы результата [3].
+
+### Полный сброс памяти
+
+Удаляются или архивируются:
+
+```text
+user memories
+project memories
+conversation summaries
+retrieval embeddings
+agent preferences
+```
+
+Но полную историю аудита лучше не уничтожать автоматически. Практически полезно разделять:
+
+```text
+Forget from model memory
+≠
+Delete from legal/audit storage
+```
+
+## Стратегия сжатия
+
+Пусть:
+
+```text
+C = максимальная ёмкость контекстного окна
+R = резерв под ответ и reasoning
+P = системные инструкции
+M = память
+H = история
+```
+
+Ограничение:
+
+$$
+tokens(P) + tokens(M) + tokens(H) + R \leq C
+$$
+
+Нельзя ждать полного заполнения окна. Лучше запускать сжатие заранее, например когда используется 60–75% доступного бюджета; конкретный порог зависит от модели и длины ответа [4].
+
+Практическая последовательность:
+
+```text
+1. Зарезервировать место для ответа.
+2. Зарезервировать место для tool calls.
+3. Оставить system и policy без сжатия.
+4. Сохранить последние сообщения полностью.
+5. Сжать старый общий префикс.
+6. Подтянуть только релевантную память.
+7. Проверить итоговый token budget.
+```
+
+## Какой текст сжимать
+
+Не стоит делать один бесформенный абзац. Лучше использовать структурированный summary:
+
+```json
+{
+  "period": "M0-M70",
+  "goal": "...",
+  "decisions": [
+    {
+      "text": "Выбрана PostgreSQL",
+      "source_message_id": "M44",
+      "confidence": 0.96
+    }
+  ],
+  "constraints": [
+    "Нельзя передавать секреты модели"
+  ],
+  "facts": [
+    "Проект развернут в Kubernetes"
+  ],
+  "open_questions": [
+    "Нужен ли отдельный tenant для аналитики?"
+  ],
+  "rejected_options": [
+    "Прямой доступ агента к базе"
+  ],
+  "active_tasks": [
+    "Спроектировать policy engine"
+  ]
+}
+```
+
+Ссылки на исходные сообщения важны: если summary оказался ошибочным, система может обратиться к оригиналу и восстановить контекст.
+
+## Слоистое окно
+
+Хорошее рабочее окно можно строить так:
+
+```text
+[System / safety / policy]
+[Project instructions]
+[Branch summary]
+[Relevant durable memory]
+[Recent messages]
+[Current user request]
+[Reserved output/tool budget]
+```
+
+Пример бюджета:
+
+```text
+System + policy:       2 000 токенов
+Project context:       2 000
+Branch summary:        4 000
+Relevant memory:       2 000
+Recent messages:       8 000
+Current request:       1 000
+Output reserve:        4 000
+Tool reserve:          2 000
+```
+
+Числа здесь иллюстративны. Важно не само распределение, а фиксированные категории и приоритеты.
+
+## Приоритеты удаления
+
+Когда контекст переполняется, удалять следует не просто «самые старые сообщения», а по политике:
+
+```text
+Нельзя удалять:
+- system instructions;
+- права и ограничения;
+- подтверждённые решения;
+- незавершённые действия;
+- активный пользовательский запрос.
+
+Можно сжимать или удалять раньше:
+- приветствия;
+- повторения;
+- промежуточные рассуждения;
+- уже обработанные tool results;
+- неактуальные отклонённые варианты;
+- большие исходные документы, если они доступны через retrieval.
+```
+
+Для сообщений полезно хранить `importance` и `scope`:
+
+```json
+{
+  "importance": "high",
+  "scope": "project",
+  "retention": "until_project_deleted"
+}
+```
+
+## Контекст и долговременная память
+
+Не каждое сообщение нужно превращать в память. Полезно разделять:
+
+```text
+Working memory:
+  текущая задача и последние сообщения
+
+Episodic memory:
+  "в прошлый раз пользователь выбрал вариант B"
+
+Semantic memory:
+  устойчивые факты проекта
+
+Profile memory:
+  язык, формат и предпочтения пользователя
+```
+
+При записи памяти стоит сохранять источник и область видимости:
+
+```json
+{
+  "content": "Пользователь предпочитает ответы на русском",
+  "scope": "user",
+  "source_message_id": "M52",
+  "confidence": 0.91,
+  "expires_at": null
+}
+```
+
+При поиске память нужно фильтровать по правам до передачи модели. Vector store должен учитывать `tenant_id`, `project_id`, ветку и ACL, а не искать по всей базе с последующей фильтрацией [5].
+
+## Сброс отдельной ветки
+
+Можно предусмотреть команды разных уровней:
+
+```text
+/reset_run
+```
+
+Очищает только текущий запуск.
+
+```text
+/reset_context
+```
+
+Создаёт новый checkpoint, сохраняя историю.
+
+```text
+/reset_branch_memory
+```
+
+Удаляет summary и branch-scoped memory, но оставляет сообщения.
+
+```text
+/reset_conversation
+```
+
+Создаёт новую активную ветку без использования старого контекста.
+
+```text
+/forget_user_memory
+```
+
+Удаляет долговременные пользовательские предпочтения.
+
+Полный сброс лучше оформлять как новую корневую сессию:
+
+```text
+Старая ветка: архив
+Новая ветка: новый root
+```
+
+Это надёжнее, чем пытаться пометить десятки узлов как «невидимые».
+
+## Важная тонкость: внешние действия
+
+Сжатие контекста не должно означать повторное выполнение действий. Например, если агент уже создал задачу в Jira, в summary должно быть:
+
+```json
+{
+  "external_action": {
+    "system": "jira",
+    "operation": "create_issue",
+    "external_id": "PROJ-184",
+    "status": "completed",
+    "idempotency_key": "..."
+  }
+}
+```
+
+Иначе после ветвления или восстановления агент может решить, что действие не выполнялось, и создать дубликат.
+
+## Рекомендуемая архитектура
+
+```text
+Immutable message tree
+        ↓
+Path resolver
+        ↓
+Checkpoint / summary manager
+        ↓
+Context assembler
+        ├── policy
+        ├── project instructions
+        ├── branch summary
+        ├── relevant memory
+        ├── recent messages
+        └── current request
+        ↓
+Token budget validator
+        ↓
+LLM / tools
+        ↓
+New message + state checkpoint + audit event
+```
+
+Минимальные таблицы:
+
+```text
+messages
+branches
+context_checkpoints
+memory_items
+agent_runs
+tool_events
+```
+
+Оптимальная практика для древовидного чата: **никогда не удалять исходную историю ради экономии токенов; сжимать только представление, передаваемое модели**. Для каждой ветки хранить собственный `head`, периодические checkpoint, summary общего префикса и локальную память; при сбросе очищать выбранный слой, а не всю систему сразу [5][2][3].
+
+Цитаты:
+[1] Conversation state | OpenAI API https://developers.openai.com/api/docs/guides/conversation-state
+[2] Persistence - Docs by LangChain https://docs.langchain.com/oss/python/langgraph/persistence
+[3] Compaction | OpenAI API https://developers.openai.com/api/docs/guides/compaction
+[4] Context Window Management and Session Lifecycle for Long ... https://zylos.ai/research/2026-03-31-context-window-management-session-lifecycle-long-running-agents/
+[5] 9.5 Working Memory Management - Agentic AI Knowledge Base https://agentic-ai.readthedocs.io/en/latest/AgentMemory/short-term/
+[6] Context Compaction Strategies for LLM Agents https://x.com/vsletten3006/status/2084121380225007925
+[7] langgraph/docs/docs/concepts/persistence.md at main · langchain-ai/langgraph https://github.com/langchain-ai/langgraph/blob/main/docs/docs/concepts/persistence.md
+[8] LangGraph Memory and Persistence: Checkpointers & Threads https://www.crewship.dev/learn/langgraph-memory
+[9] Cursor docs with best practices for managing context and quality of long conversations within AI applications https://gist.github.com/mkbctrl/d83c3fbb210fe726ea522bae82c5fa3c
+[10] Persistence and Checkpointing | langchain-ai/langgraphjs ... https://deepwiki.com/langchain-ai/langgraphjs/3-persistence-and-checkpointing

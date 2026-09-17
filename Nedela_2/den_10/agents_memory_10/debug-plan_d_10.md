@@ -78,4 +78,39 @@ done
 
 ## Блок 4 — Результат
 
-_(заполняется после внесения правок)_
+Все пункты Блока 1 применены к `den_10_Kod.py`. `py_compile` — OK.
+
+**Причина багов.** `den_10_Kod.py` сделан копией **промежуточной** версии
+`den_9_Kod.py` (до отладочных фиксов Дня 9), поэтому потерял все фиксы Дней 7–9.
+Фичи самого Дня 10 (`facts`, `branching`, `branches`, `active_branch`,
+`_build_messages_facts`/`_build_messages_branching`, `FACTS_PROMPT`, `cmd_facts`,
+`cmd_branch`, `cmd_compare_strategies`, `facts_usage`, снимок v4) сохранены.
+
+**Сделано (по группам):**
+- **A (регрессии):** A1–A10 — выполнены (`KNOWN_COMMANDS` + фильтр, `cmd_help`,
+  `get_user_message` в `cmd_layer`, `stdout.reconfigure`, `--fresh`,
+  `SUMMARY_FILE = splitext(LOG_FILE)`, `try/except OSError/EOFError`, голое `/layer`,
+  `save_history` append + `saved_count`/`mark_saved`).
+- **B (JSON-валидация):** B1–B5 — выполнены (`KNOWN_STRATEGIES` с facts/branching,
+  `KNOWN_MEMORY_TYPES`, `MIN_MIGRATABLE_VERSION` + проверка версии, `[Конфиг]`,
+  удалены `load_history`/`load_summary`, `notify_old_log()`, полный сброс в `clear_context`).
+- **C (leveled-память):** C1–C5 — выполнены (`summary_by_layer`, `COMPRESS_PROMPTS`,
+  `_run_compression`/`_apply_compression` послойно, приоритетный блок `PRIORITY_CAP`,
+  синхронизация методов вывода).
+- **D (специфика дня):** D1–D3 — выполнены (сброс `usage_total`/`summary_usage`/
+  `facts_usage`/`last_usage`/`exchanges` при отказе; `cmd_tokens` оценивает реплику
+  пользователя; `facts_usage` восстанавливается из снимка v4).
+
+**Проверки.**
+- `py_compile` — OK (исправлена лишняя `)` в `_build_messages_leveling`).
+- grep-чеклист: регрессии/двойной источник — 0; все фиксы — на месте.
+- Смоук-тест (`API_KEY=test-key`, `--fresh`, branching/session): `/help`,
+  фильтр неизвестной команды, `/branch list` (активная ветка `main` видна),
+  `/facts` корректно отклоняется в режиме branching, `notify_old_log`,
+  `save_history` при `/exit` — без падений, EXIT=0.
+
+**Открытые вопросы (не блокируют).**
+1. Живой прогон с реальным API не выполнялся (только с явного согласия пользователя).
+2. `__pycache__/den_10_Kod.cpython-313.pyc` перекомпилирован как следствие правки кода.
+3. Директория `ND/` в корне репозитория — не артефакт дебага (пользовательские файлы,
+   созданы до правок), не трогал.
