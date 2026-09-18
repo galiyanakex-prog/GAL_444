@@ -1,0 +1,13 @@
+{
+  "id": "cli_user",
+  "name": "Иван",
+  "style": {
+    "answers": "краткий"
+  },
+  "constraints": {
+    "answers": "Python"
+  },
+  "context": {
+    "answers": "обучение"
+  }
+}

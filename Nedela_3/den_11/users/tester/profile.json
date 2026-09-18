@@ -1,0 +1,13 @@
+{
+  "id": "tester",
+  "name": "Иван",
+  "style": {
+    "answers": "краткий"
+  },
+  "constraints": {
+    "answers": "Python"
+  },
+  "context": {
+    "answers": "обучаюсь"
+  }
+}
