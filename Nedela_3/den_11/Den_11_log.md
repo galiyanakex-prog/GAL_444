@@ -84,3 +84,23 @@
 [02:30:16] [Агент] M1: ответ получен (доставка: ['long_term', 'profile', 'short_term', 'working'])
 [02:30:16] [Память] working ← ['lifecycle_summary'] → /tmp/den11_acc_$/users/a/tasks/Основная_задача/working_memory.json
 [02:30:16] [Память] remember(working) → working_memory.json ['lifecycle_summary']
+[15:40:06] [Хранилище] profile = JSON в SQLite (таблица profiles, user_id=demo)
+[15:40:06] [Память] profile ← ['id', 'name', 'style', 'constraints', 'context'] → /home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/Nedela_3/den_11/users/demo/profile.json (JSON в SQLite)
+[15:40:06] [Память] remember(profile) → profile.json (['id', 'name', 'style', 'constraints', 'context'])
+[15:40:06] [Память] working ← ['description'] → /home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/Nedela_3/den_11/users/demo/tasks/Основная_задача/working_memory.json
+[15:40:06] [Память] remember(working) → working_memory.json ['description']
+[15:40:06] [Память] long_term ← ['tasks'] → /home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/Nedela_3/den_11/users/demo/long_term_memory.json
+[15:40:06] [Память] remember(long_term) → long_term_memory.json ['tasks']
+[15:40:06] [Агент] Пользователь demo инициализирован (интервью пройдено)
+[15:41:01] [Память] short_term ← M1 (parent=None) → /home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/Nedela_3/den_11/users/demo/tasks/Основная_задача/sessions/20260918_153722/session.json
+[15:41:08] [Память] short_term ← M2 (parent=M1) → /home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/Nedela_3/den_11/users/demo/tasks/Основная_задача/sessions/20260918_153722/session.json
+[15:41:08] [Агент] M1: ответ получен (доставка: ['long_term', 'profile', 'short_term', 'working'])
+[15:44:12] [Память] short_term ← M3 (parent=M2) → /home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/Nedela_3/den_11/users/demo/tasks/Основная_задача/sessions/20260918_153722/session.json
+[15:44:22] [Память] short_term ← M4 (parent=M3) → /home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/Nedela_3/den_11/users/demo/tasks/Основная_задача/sessions/20260918_153722/session.json
+[15:44:22] [Агент] M2: ответ получен (доставка: ['long_term', 'profile', 'short_term', 'working'])
+[15:48:15] [Память] short_term ← M5 (parent=M4) → /home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/Nedela_3/den_11/users/demo/tasks/Основная_задача/sessions/20260918_153722/session.json
+[15:49:59] [Память] short_term ← M6 (parent=M5) → /home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/Nedela_3/den_11/users/demo/tasks/Основная_задача/sessions/20260918_153722/session.json
+[15:49:59] [Агент] M3: ответ получен (доставка: ['long_term', 'profile', 'short_term', 'working'])
+[15:54:41] [Память] short_term ← M7 (parent=M6) → /home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/Nedela_3/den_11/users/demo/tasks/Основная_задача/sessions/20260918_153722/session.json
+[15:54:53] [Память] short_term ← M8 (parent=M7) → /home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/Nedela_3/den_11/users/demo/tasks/Основная_задача/sessions/20260918_153722/session.json
+[15:54:53] [Агент] M4: ответ получен (доставка: ['long_term', 'profile', 'short_term', 'working'])
