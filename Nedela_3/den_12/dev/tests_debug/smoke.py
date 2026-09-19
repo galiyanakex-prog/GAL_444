@@ -51,6 +51,7 @@ def test_cli_subprocess():
 
     Использует изолированный --memory-dir (tests_debug/.tmp) — прогон идемпотентен и
     не трогает рабочие users/ дня (§7.1, §2.1: тестовые артефакты — только .tmp).
+    Логи тоже изолированы (--log/--token-log в tmp): дефолты Kod.py пишут в корень проекта.
     """
     os.makedirs(TMP_ROOT, exist_ok=True)
     tmp = tempfile.mkdtemp(prefix="smoke_cli_", dir=TMP_ROOT)
@@ -59,7 +60,9 @@ def test_cli_subprocess():
     env["API_KEY"] = "test-key"  # гарантируем MockClient-ветку
     proc = subprocess.run(
         [sys.executable, os.path.join(BASE_DIR, "Kod.py"),
-         "--mock", "--memory-dir", os.path.join(tmp, "users")],
+         "--mock", "--memory-dir", os.path.join(tmp, "users"),
+         "--log", os.path.join(tmp, "log.md"),
+         "--token-log", os.path.join(tmp, "tokens.csv")],
         input=stdin, capture_output=True, text=True, timeout=60, env=env,
         cwd=BASE_DIR,
     )
