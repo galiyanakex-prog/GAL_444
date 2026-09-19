@@ -1,0 +1,13 @@
+{
+  "id": "demo",
+  "name": "Пётр",
+  "style": {
+    "answers": "краткий"
+  },
+  "constraints": {
+    "answers": "только Python; SQLite; общение на русском"
+  },
+  "context": {
+    "answers": "делаем сайт онлайн магазина на Django"
+  }
+}
