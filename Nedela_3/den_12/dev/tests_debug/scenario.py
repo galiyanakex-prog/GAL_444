@@ -8,7 +8,8 @@
   2. «какие данные попадают в каждый слой» (маршрутизация remember);
   3. дозированная доставка (deliver без long_term);
   4. влияние памяти на ответы (сравнение с/без слоя);
-  5. resume «с того же места».
+  5. resume «с того же места»;
+  6. персонализация: два профиля → разный состав промта + авто-роутинг.
 """
 import os
 import sys
@@ -117,6 +118,55 @@ def scenario_resume(tmp):
     print("[scenario] resume OK")
 
 
+def scenario_personalization(tmp):
+    """6. Персонализация: профили «Химик» и «Экономист» → разный состав промта.
+
+    Один и тот же запрос даёт разный блок профиля (MockClient отражает блоки);
+    auto_route переключает профиль по запросу — лог содержит «[Роутер]» и
+    «[Агент] активный профиль».
+    """
+    logs = []
+    repo = ProfileRepository(os.path.join(tmp, "profiles.db"))
+    store = Store(os.path.join(tmp, "users"), profile_repo=repo, log=logs.append)
+    memory = MemoryManager(default_layers(store, log=logs.append), log=logs.append)
+    agent = Agent(MockClient(), memory, PromptBuilder("Ты ассистент"), store,
+                  user_id="frank", log=logs.append)
+    agent.initialize_user("frank", "Ф", {"style": "a", "constraints": "b", "context": "c"})
+
+    chemist = {"id": "frank", "name": "Химик", "domain": "химия",
+               "triggers": ["химия", "реактив", "реакция"],
+               "style": {"answers": "строго по формулам"}, "constraints": {}, "context": {},
+               "skills": [{"name": "spec", "instructions": "составь спеку ответа"}]}
+    economist = {"id": "frank", "name": "Экономист", "domain": "экономика",
+                 "triggers": ["бюджет", "цена"],
+                 "style": {"answers": "считай выгоду"}, "constraints": {}, "context": {}}
+    store.save_profile("frank", chemist, "chemist")
+    store.save_profile("frank", economist, "economist")
+
+    # Один и тот же запрос — разный состав промта для разных активных профилей.
+    q = "расскажи про это"
+    agent.switch_profile("chemist")
+    block_chem = agent.build_context(q).memory_blocks.get("profile", "")
+    answer_chem = agent.respond(q)
+    agent.switch_profile("economist")
+    block_eco = agent.build_context(q).memory_blocks.get("profile", "")
+    answer_eco = agent.respond(q)
+    assert "Химик" in block_chem and "Пайплайн скиллов:" in block_chem
+    assert "Экономист" in block_eco
+    assert block_chem != block_eco
+    assert answer_chem != answer_eco
+
+    # Авто-роутинг: запрос с триггером переключает профиль до сборки промта.
+    agent.auto_route = True
+    agent.respond("какая реакция идёт с реактивом?")
+    assert agent.active_profile == "chemist"
+
+    joined = "\n".join(logs)
+    assert "[Роутер]" in joined
+    assert "[Агент] активный профиль" in joined
+    print("[scenario] персонализация (профили + роутер) OK")
+
+
 def main():
     os.makedirs(TMP_ROOT, exist_ok=True)
     tmp = tempfile.mkdtemp(prefix="scn_", dir=TMP_ROOT)
@@ -125,6 +175,7 @@ def main():
     scenario_dosed_delivery(tmp)
     scenario_influence(tmp)
     scenario_resume(tmp)
+    scenario_personalization(tmp)
     print("SCENARIO OK: exit 0")
     return 0
 

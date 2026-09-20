@@ -21,6 +21,7 @@ from memory.base import MemoryContext, MemoryItem
 from memory.manager import MemoryManager
 from core.prompt_builder import PromptBuilder
 from core.llm_client import LLMClient
+from core.profile_router import ProfileRouter
 
 
 class PromptContext:
@@ -52,6 +53,13 @@ class Agent:
         self.default_task = default_task or "Основная_задача"
         self.task = self.default_task
         self.deliver = {"profile", "long_term", "working", "short_term"}
+
+        # Персонализация: активный профиль сессии (None → default), авто-роутинг
+        # и детерминированный роутер профилей (только если у store есть репозиторий).
+        self.active_profile = None
+        self.auto_route = False
+        self.router = ProfileRouter(store, log=self.log) \
+            if getattr(store, "profile_repo", None) is not None else None
 
         # Текущая сессия (для краткосрочной памяти).
         self.session_id = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -132,10 +140,21 @@ class Agent:
             self.task = first.get("name", first) if isinstance(first, dict) else first
         self.initialized = True
 
+    # --- Персонализация: активный профиль ----------------------------------------
+    def switch_profile(self, profile_id: str) -> bool:
+        """Переключает активный профиль сессии. False — если профиля нет."""
+        known = [pid for pid, _ in self.store.list_profiles(self.user_id)]
+        if profile_id not in known:
+            return False
+        self.active_profile = profile_id
+        self.log(f"[Агент] активный профиль: {profile_id}")
+        return True
+
     # --- Цикл: сообщение → память → промт → LLM → ответ --------------------------
     def build_context(self, query: str) -> PromptContext:
         """Составляет PromptContext: блоки памяти + краткосрочная история."""
-        ctx = MemoryContext(self.user_id, self.task, self.session_id)
+        ctx = MemoryContext(self.user_id, self.task, self.session_id,
+                            profile_id=self.active_profile or "")
 
         # Дозированная доставка: блоки только для выбранных слоёв.
         blocks = self.memory.build_blocks(self.deliver, ctx)
@@ -153,8 +172,14 @@ class Agent:
     def respond(self, user_message: str) -> str:
         """Полный цикл обработки одного сообщения пользователя."""
         self.message_counter += 1
-        ctx_mem = MemoryContext(self.user_id, self.task, self.session_id)
         message_id = f"M{self.message_counter}"
+
+        # 0. Авто-роутинг: профиль выбирается ДО сборки промта — активный профиль
+        #    подключён к каждому запросу (персонализация).
+        if self.auto_route and self.router is not None:
+            candidate = self.router.route(self.user_id, user_message)
+            if candidate and candidate != (self.active_profile or ""):
+                self.switch_profile(candidate)
 
         # 1. Явное сохранение сообщения в краткосрочную память (source=user).
         self.remember_message("user", user_message, message_id)

@@ -12,15 +12,20 @@ from abc import ABC, abstractmethod
 # Канонический контекст пути: что читать/писать и куда.
 # Передаётся в каждый метод слоёв вместо «догадывания» путей.
 class MemoryContext:
-    """Адресный контекст: чья память и в рамках какой задачи/сессии читаем."""
+    """Адресный контекст: чья память и в рамках какой задачи/сессии/профиля читаем."""
 
-    def __init__(self, user_id: str, task: str = "", session_id: str = ""):
+    def __init__(self, user_id: str, task: str = "", session_id: str = "",
+                 profile_id: str = ""):
         self.user_id = user_id
         self.task = task
         self.session_id = session_id
+        # profile_id — аддитивный параметр (персонализация): "" → активный/дефолтный
+        # профиль. Существующие вызовы с 3 аргументами работают без изменений.
+        self.profile_id = profile_id
 
     def as_dict(self) -> dict:
-        return {"user_id": self.user_id, "task": self.task, "session_id": self.session_id}
+        return {"user_id": self.user_id, "task": self.task,
+                "session_id": self.session_id, "profile_id": self.profile_id}
 
 
 # Обёртка над одним объектом памяти с метаданными (arch_prim R5).

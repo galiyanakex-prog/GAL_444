@@ -18,14 +18,15 @@
 #   python Kod.py --user alice   # сразу идентификация alice
 #   python Kod.py --mock         # тестовый режим на MockClient (без ключа)
 #
-# Внутри чата: /memory /profile /tasks /task <имя> /deliver <слои>
-# /compare /summary /state /tokens /cost /help /exit
+# Внутри чата: /memory /profile [list|show|use|new|route|auto] /tasks
+# /task <имя> /deliver <слои> /compare /summary /state /tokens /cost /help /exit
 # ============================================================================
 
 # 1. Импорты ----------------------------------------------------------------
 import os
 import sys
 import csv
+import json
 
 # readline — редактирование ввода (стрелки); без него input() вставляет
 # escape-последовательности в текст. Обёрнуто в try: на Windows не падаем.
@@ -70,6 +71,8 @@ parser = argparse.ArgumentParser(
 )
 parser.add_argument("--user", type=str, default=None,
                     help="Идентификатор пользователя (без него — спросит на старте).")
+parser.add_argument("--profile", type=str, default=None,
+                    help="Активный профиль на старте (несуществующий → предупреждение и default).")
 parser.add_argument("--deliver", type=str, default="profile,long_term,working,short_term",
                     help="Набор слоёв для доставки в промт (через запятую).")
 parser.add_argument("--mock", action="store_true",
@@ -177,7 +180,13 @@ def run_interview(agent: Agent, user_id: str):
 def print_help():
     print("[Справка] Доступные команды:")
     print("  /memory              — снимок «какие данные в каком типе памяти»")
-    print("  /profile             — показать профиль (style/constraints/context)")
+    print("  /profile             — активный профиль (style/constraints/context)")
+    print("  /profile list        — профили пользователя (* default, > активный)")
+    print("  /profile show <id>   — полный JSON профиля")
+    print("  /profile use <id>    — переключить активный профиль сессии")
+    print("  /profile new <id>    — создать профиль (мини-интервью)")
+    print("  /profile route <текст> — показать решение роутера, НЕ переключая")
+    print("  /profile auto on|off — авто-роутинг профиля по каждому запросу")
     print("  /tasks               — список задач + активная задача")
     print("  /task <имя>          — переключить/создать задачу (с отметкой перехода)")
     print("  /deliver <слои>      — набор включаемых слоёв (напр. profile,working)")
@@ -189,6 +198,113 @@ def print_help():
     print("  /help                — эта справка")
     print("  /exit                — завершить и сохранить состояние")
     print()
+
+
+# 10.1 Обработка семейства команд /profile (персонализация) -------------------------
+def handle_profile_command(agent: Agent, user_input: str):
+    """Разбирает /profile [list|show|use|new|route|auto]; голое /profile — как раньше."""
+    parts = user_input.split()
+    sub = parts[1] if len(parts) > 1 else ""
+
+    # Голое /profile — активный профиль (обратная совместимость с днём 11).
+    if not sub:
+        ctx = MemoryContext(agent.user_id, profile_id=agent.active_profile or "")
+        profile = agent.memory.layers["profile"].read(ctx)
+        active = agent.active_profile or "(default)"
+        print(f"[Профиль] активный: {active}\n{profile}\n")
+        return
+
+    if sub == "list":
+        profiles = agent.store.list_profiles(agent.user_id)
+        # Активный профиль: явный выбор сессии, иначе — default из хранилища.
+        active = agent.active_profile
+        if active is None and agent.store.profile_repo is not None:
+            active = agent.store.profile_repo.get_default(agent.user_id)
+        print("[Профили]")
+        for pid, is_default in profiles:
+            marks = ("*" if is_default else " ") + (">" if pid == active else " ")
+            print(f"  {marks} {pid}")
+        print("  (* — default, > — активный)\n")
+        return
+
+    if sub == "show":
+        if len(parts) < 3:
+            print("[Профиль] Укажите id: /profile show <id>\n")
+            return
+        profile = agent.store.load_profile(agent.user_id, parts[2])
+        if profile is None:
+            print(f"[Профиль] «{parts[2]}» не найден.\n")
+            return
+        print(f"[Профиль {parts[2]}]\n{json.dumps(profile, ensure_ascii=False, indent=2)}\n")
+        return
+
+    if sub == "use":
+        if len(parts) < 3:
+            print("[Профиль] Укажите id: /profile use <id>\n")
+            return
+        if agent.switch_profile(parts[2]):
+            print(f"[Профиль] Активный профиль: {parts[2]}\n")
+        else:
+            print(f"[Профиль] «{parts[2]}» не существует (см. /profile list)\n")
+        return
+
+    if sub == "new":
+        if len(parts) < 3:
+            print("[Профиль] Укажите id: /profile new <id>\n")
+            return
+        run_profile_interview(agent, parts[2])
+        return
+
+    if sub == "route":
+        text = user_input.split(maxsplit=2)
+        if len(text) < 3:
+            print("[Роутер] Укажите текст: /profile route <текст>\n")
+            return
+        if agent.router is None:
+            print("[Роутер] Недоступен (нет репозитория профилей).\n")
+            return
+        print(agent.router.explain(agent.user_id, text[2]) + "\n")
+        return
+
+    if sub == "auto":
+        mode = parts[2] if len(parts) > 2 else ""
+        if mode == "on":
+            agent.auto_route = True
+            print("[Роутер] Авто-роутинг включён (профиль выбирается по каждому запросу).\n")
+        elif mode == "off":
+            agent.auto_route = False
+            print("[Роутер] Авто-роутинг выключен.\n")
+        else:
+            print(f"[Роутер] Авто-роутинг: {'on' if agent.auto_route else 'off'} "
+                  f"(управление: /profile auto on|off)\n")
+        return
+
+    print(f"[Профиль] Неизвестная подкоманда: {sub}. См. /help\n")
+
+
+def run_profile_interview(agent: Agent, profile_id: str):
+    """Мини-интервью создания профиля: name, domain, triggers, style, constraints, context."""
+    print(f"[Профиль] Создание профиля «{profile_id}» (мини-интервью).")
+    name = input("  Имя профиля: ").strip() or profile_id
+    domain = input("  Домен (область запросов): ").strip()
+    triggers = [t.strip() for t in input("  Триггеры (через запятую): ").split(",") if t.strip()]
+    style = input("  Стиль ответов: ").strip()
+    constraints = input("  Ограничения: ").strip()
+    context = input("  Контекст: ").strip()
+    profile = {
+        "id": agent.user_id,
+        "profile_id": profile_id,
+        "name": name,
+        "domain": domain,
+        "triggers": triggers,
+        "style": {"answers": style},
+        "constraints": {"answers": constraints},
+        "context": {"answers": context},
+        "skills": [],
+    }
+    agent.store.save_profile(agent.user_id, profile, profile_id)
+    agent.switch_profile(profile_id)
+    print(f"[Профиль] Профиль «{profile_id}» создан и активирован.\n")
 
 
 # 11. Демонстрация влияния памяти на ответы ----------------------------------------
@@ -256,13 +372,22 @@ def main():
     else:
         run_interview(agent, user_id)
 
+    # Флаг --profile: активный профиль на старте (после идентификации).
+    # Несуществующий профиль → предупреждение и default (active_profile=None).
+    if args.profile:
+        if agent.switch_profile(args.profile):
+            print(f"[Профиль] Активный профиль на старте: {args.profile}")
+        else:
+            print(f"[Профиль] ⚠ Профиль «{args.profile}» не найден — использую default.")
+
     # Применяем --deliver (набор слоёв по умолчанию).
     deliver = {part.strip() for part in args.deliver.split(",") if part.strip()}
     agent.deliver = deliver & set(LAYER_ORDER)
     print(f"[Режим] Доставка слоёв: {sorted(agent.deliver)}")
     if args.mock:
         print("[Режим] MockClient (заглушка) — живых запросов к API не будет.")
-    print("Команды: /memory /profile /tasks /task /deliver /compare /summary /state /tokens /cost /help /exit\n")
+    print("Команды: /memory /profile [list|show|use|new|route|auto] /tasks /task "
+          "/deliver /compare /summary /state /tokens /cost /help /exit\n")
 
     # Главный цикл.
     while True:
@@ -282,9 +407,7 @@ def main():
                     print(f"[Память]\n{agent.memory.report(ctx)}\n")
                     continue
                 if command == "/profile":
-                    profile = agent.memory.layers["profile"].read(
-                        MemoryContext(agent.user_id))
-                    print(f"[Профиль]\n{profile}\n")
+                    handle_profile_command(agent, user_input)
                     continue
                 if command == "/tasks":
                     tasks = agent.store.list_tasks(agent.user_id)

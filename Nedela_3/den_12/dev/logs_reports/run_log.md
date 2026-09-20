@@ -61,6 +61,7 @@ koda --yolo -p "$MP/ПРОМТ_<часть>.md"
 | 9 | Отладка | L1–L4: unit_runner/smoke/scenario все exit 0 | 0 | ✅ |
 | 10 | Финал | README/run.sh/run.desktop/Проверка.md/final_report; `API_KEY=test-key bash $TST/check_acceptance.sh` → 9/9 | 0 | ✅ |
 | 11 | Живой смоук | требует явного согласия пользователя на живые вызовы (§3) | — | ⏸ отложен |
+| E | Персонализация (ПРОМТ_person.md, фазы A–D) | L1 OK; L2 `unit_runner.py` → 40 OK / 0 FAIL (вкл. test_person 9); L3 smoke OK; L4 scenario → 6/6 (вкл. scenario_personalization); гейт `check_acceptance.sh` → 9 из 9 | 0 | ✅ |
 
 ## Инцидент безопасности 2026-09-18
 

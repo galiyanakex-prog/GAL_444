@@ -3,7 +3,8 @@
 
 Канон куратора (Суть_N3 §4.8 п.3):
   users/<user_id>/
-  ├── profile.json                 # зеркало профиля (JSON, источник — SQLite)
+  ├── profile.json                 # зеркало профиля default (JSON, источник — SQLite)
+  ├── profiles/<profile_id>.json   # зеркала всех профилей (персонализация)
   ├── long_term_memory.json        # ссылка на профиль + задачи + решения
   └── tasks/<task_name>/
       ├── working_memory.json      # описание задачи, ссылки на сессии, резюме жизненного цикла
@@ -84,25 +85,64 @@ class Store:
             json.dump(data, f, ensure_ascii=False, indent=2)
         return filepath
 
-    # --- Профиль -----------------------------------------------------------------
-    def profile_path(self, user_id: str) -> str:
-        return os.path.join(self.user_dir(user_id), "profile.json")
+    # --- Профили (несколько на пользователя, arch_den_12 §2.4–2.5) ----------------
+    def profiles_dir(self, user_id: str) -> str:
+        """Каталог зеркал всех профилей: users/<id>/profiles/."""
+        return os.path.join(self.user_dir(user_id), "profiles")
 
-    def save_profile(self, user_id: str, profile: dict) -> str:
-        """Сохраняет профиль: в SQLite (авторитет) + зеркало profile.json."""
+    def profile_path(self, user_id: str, profile_id: str = "default") -> str:
+        """Путь зеркала профиля: users/<id>/profiles/<pid>.json.
+
+        Совместимость: users/<id>/profile.json остаётся зеркалом default —
+        его пишет save_profile(profile_id='default') дополнительно.
+        """
+        return os.path.join(self.profiles_dir(user_id), f"{safe_name(profile_id)}.json")
+
+    def save_profile(self, user_id: str, profile: dict, profile_id: str = "default") -> str:
+        """Сохраняет профиль: в SQLite (авторитет) + зеркало profiles/<pid>.json.
+
+        Для профиля default дополнительно пишется старое зеркало profile.json
+        (обратная совместимость с днём 11).
+        """
         self.ensure_user(user_id)
-        path = self.write_json(self.profile_path(user_id), profile)
+        path = self.write_json(self.profile_path(user_id, profile_id), profile)
+        if profile_id == "default":
+            self.write_json(os.path.join(self.user_dir(user_id), "profile.json"), profile)
         if self.profile_repo is not None:
-            self.profile_repo.save_profile(user_id, profile)
+            self.profile_repo.save_profile(user_id, profile, profile_id)
         return path
 
-    def load_profile(self, user_id: str):
-        # Авторитет — SQLite; зеркало JSON — fallback (например, если базу удалили).
+    def load_profile(self, user_id: str, profile_id: str = None):
+        """Профиль по id (None/"" → дефолтный). Авторитет — SQLite, зеркало — fallback."""
         if self.profile_repo is not None:
-            profile = self.profile_repo.load_profile(user_id)
+            profile = self.profile_repo.load_profile(user_id, profile_id)
             if profile is not None:
                 return profile
-        return self.read_json(self.profile_path(user_id), None)
+        if profile_id:
+            return self.read_json(self.profile_path(user_id, profile_id), None)
+        # Fallback без id: зеркало default → старое profile.json (день 11).
+        profile = self.read_json(self.profile_path(user_id, "default"), None)
+        if profile is None:
+            profile = self.read_json(os.path.join(self.user_dir(user_id), "profile.json"), None)
+        return profile
+
+    def list_profiles(self, user_id: str) -> list:
+        """Список профилей [(profile_id, is_default: bool)] — из SQLite, без БД — по каталогу."""
+        if self.profile_repo is not None:
+            return self.profile_repo.list_profiles(user_id)
+        pdir = self.profiles_dir(user_id)
+        if not os.path.isdir(pdir):
+            return []
+        return sorted(
+            (os.path.splitext(f)[0], f == "default.json")
+            for f in os.listdir(pdir) if f.endswith(".json")
+        )
+
+    def set_default_profile(self, user_id: str, profile_id: str) -> bool:
+        """Делает профиль дефолтным (False — если профиля нет / нет БД)."""
+        if self.profile_repo is None:
+            return False
+        return self.profile_repo.set_default(user_id, profile_id)
 
     # --- Долговременная память ---------------------------------------------------
     def long_term_path(self, user_id: str) -> str:
