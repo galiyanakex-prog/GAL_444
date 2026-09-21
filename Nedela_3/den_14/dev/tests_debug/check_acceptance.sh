@@ -68,6 +68,50 @@ check "task_state.json переживает перезапуск (пауза→r
   grep -q '\"stage\": \"done\"' \"\$SNAP\"
 "
 
+# 21 (День 14): инварианты хранятся отдельно от диалога и переживают перезапуск.
+# Прогон 1: добавить инвариант → invariants.json на диске (отдельный от session.json).
+# Прогон 2 (новый процесс, тот же memory-dir): /invariants видит правило.
+check "инварианты хранятся отдельно и переживают перезапуск" bash -c "
+  set -e
+  D='$TMP/inv'; MD=\"\$D/users\"
+  printf 'u\nИ\nкраткий\nPython\nцель\n/invariant add framework.django architecture Django\n/exit\n' \
+    | API_KEY=test-key '$PY' '$KOD/Kod.py' --mock --memory-dir \"\$MD\" \
+      --log \"\$D/log.md\" --token-log \"\$D/tokens.csv\" >/dev/null 2>&1
+  INV=\$(find \"\$MD\" -name invariants.json | head -n1)
+  test -n \"\$INV\"
+  grep -q 'framework.django' \"\$INV\"
+  printf '/invariants\n/exit\n' \
+    | API_KEY=test-key '$PY' '$KOD/Kod.py' --user u --mock --memory-dir \"\$MD\" \
+      --log \"\$D/log.md\" --token-log \"\$D/tokens.csv\" 2>/dev/null | grep -q 'framework.django'
+"
+
+# 22 (День 14): конфликт запроса и инварианта → отказ (действие не исполняется).
+check "конфликт запроса и инварианта → отказ" bash -c "
+  '$PY' - <<'PYEOF'
+import os, sys, tempfile
+sys.path.insert(0, '$KOD')
+from storage.store import Store
+from storage.db import ProfileRepository
+from memory.manager import MemoryManager, default_layers
+from core.llm_client import MockClient
+from core.prompt_builder import PromptBuilder
+from core.agent import Agent, StubExecutor
+from core.invariants import Invariant
+tmp = tempfile.mkdtemp(prefix='acc_inv_', dir='$TMP')
+root = os.path.join(tmp, 'users')
+store = Store(root, profile_repo=ProfileRepository(os.path.join(root, 'p.db')))
+a = Agent(MockClient(), MemoryManager(default_layers(store)), PromptBuilder('r'), store,
+          user_id='u', executor=StubExecutor())
+a.initialize_user('u', 'И', {'style':'a','constraints':'b','context':'c'})
+a.add_invariant(Invariant(id='framework.django', category='architecture', description='Django'))
+before = a.tool_calls
+res = a.propose_and_check('перепиши API на FastAPI')
+assert res['allowed'] is False and a.tool_calls == before
+assert 'framework.django' in res['message']
+print('ok')
+PYEOF
+"
+
 # ИтОГ
 echo ""
 echo "ИТОГ: $PASS из $TOTAL зелёные (FAIL=$FAIL)"

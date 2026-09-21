@@ -236,6 +236,65 @@ def scenario_pause_resume(tmp):
     print("[scenario] пауза/продолжение задачи (task_state.json + перезапуск) OK")
 
 
+def scenario_invariant_conflict(tmp):
+    """8. Конфликт запроса и инварианта (День 14): отказ, объяснение, изменение правила.
+
+    /invariant add framework.django → запрос «перепиши API на FastAPI» → агент
+    ОТКАЗЫВАЕТ, называет framework.django и предлагает альтернативу; /check показывает
+    нарушение; /invariant set --yes меняет правило; повторный запрос проходит. Лог
+    содержит строки «[Инварианты]».
+    """
+    from core.invariants import Invariant
+    logs = []
+    repo = ProfileRepository(os.path.join(tmp, "profiles.db"))
+    store = Store(os.path.join(tmp, "users"), profile_repo=repo, log=logs.append)
+    memory = MemoryManager(default_layers(store, log=logs.append), log=logs.append)
+    agent = Agent(MockClient(), memory, PromptBuilder("Ты ассистент"), store,
+                  user_id="ivan", log=logs.append, executor=StubExecutor())
+    agent.initialize_user("ivan", "И", {"style": "a", "constraints": "b", "context": "c"})
+
+    # /invariant add framework.django architecture "Использовать Django"
+    agent.add_invariant(Invariant(id="framework.django", category="architecture",
+                                  description="Использовать Django, а не FastAPI"))
+
+    # Запрос конфликтует с инвариантом → отказ с объяснением и альтернативой.
+    before = agent.tool_calls
+    result = agent.propose_and_check("перепиши API на FastAPI")
+    assert result["allowed"] is False
+    assert agent.tool_calls == before                    # инструмент не вызван
+    assert "framework.django" in result["message"]
+    assert "альтернатив" in result["message"].lower()
+
+    # /check "перейти на FastAPI" → нарушение видно без исполнения.
+    action = agent.propose_action("перейти на FastAPI")
+    assert agent.check_invariants(action)
+
+    # Инвариант попадает в промт (явный учёт в рассуждениях).
+    joined = "\n".join(m["content"] for m in agent.prompts.build(agent.build_context("q"), agent.deliver))
+    assert "[invariants]" in joined and "framework.django" in joined
+
+    # /invariant set framework.django "..." --yes → правило изменено (требует подтверждения);
+    # без --yes — PermissionError (критерий 30).
+    try:
+        agent.update_invariant("framework.django", "Использовать FastAPI", authorized=False)
+        assert False, "ожидался PermissionError"
+    except PermissionError:
+        pass
+    agent.update_invariant("framework.django", "Использовать FastAPI", authorized=True)
+    assert agent.constraints.by_id("framework.django").description == "Использовать FastAPI"
+
+    # Чтобы запрос «перейти на FastAPI» прошёл, правило меняется явно: прежнее
+    # отключается, добавляется новое (архитектурное решение не меняется обычной фразой).
+    agent.toggle_invariant("framework.django", False)
+    agent.add_invariant(Invariant(id="framework.fastapi", category="architecture",
+                                  description="Использовать FastAPI"))
+    result2 = agent.propose_and_check("перейти на FastAPI")
+    assert result2["allowed"] is True
+
+    assert "[Инварианты]" in "\n".join(logs)
+    print("[scenario] конфликт запроса и инварианта (отказ + изменение) OK")
+
+
 def main():
     os.makedirs(TMP_ROOT, exist_ok=True)
     tmp = tempfile.mkdtemp(prefix="scn_", dir=TMP_ROOT)
@@ -246,6 +305,7 @@ def main():
     scenario_resume(tmp)
     scenario_personalization(tmp)
     scenario_pause_resume(tmp)
+    scenario_invariant_conflict(tmp)
     print("SCENARIO OK: exit 0")
     return 0
 
