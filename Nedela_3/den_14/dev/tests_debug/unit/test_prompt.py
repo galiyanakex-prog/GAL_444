@@ -6,7 +6,7 @@ import sys
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 sys.path.insert(0, BASE_DIR)
 
-from core.prompt_builder import PromptBuilder
+from core.prompt_builder import PromptBuilder, BLOCK_ORDER, DELIVERABLE
 
 
 class FakeCtx:
@@ -58,3 +58,22 @@ def test_summary_block():
     messages = builder.build(ctx, {"profile", "summary"})
     joined = " ".join(m["content"] for m in messages)
     assert "Саммари префикса" in joined
+
+
+def test_deliverable_canonical():
+    # DELIVERABLE — канонический набор доставляемых имён: содержит invariants и
+    # summary (не слои памяти), входит в BLOCK_ORDER, role/current не управляемы.
+    assert "invariants" in DELIVERABLE
+    assert "summary" in DELIVERABLE
+    assert set(DELIVERABLE) <= set(BLOCK_ORDER)
+    assert "role" not in DELIVERABLE
+    assert "current" not in DELIVERABLE
+
+
+def test_summary_reachable_via_deliverable():
+    # summary достижим через канонический набор (регрессия бага A1: раньше
+    # deliver пересекался с LAYER_ORDER, где имени summary нет).
+    builder = make_builder()
+    ctx = FakeCtx("вопрос", {"profile": "Имя"}, summary="Саммари префикса")
+    messages = builder.build(ctx, {"profile", "summary"})
+    assert any("Саммари префикса" in m["content"] for m in messages)

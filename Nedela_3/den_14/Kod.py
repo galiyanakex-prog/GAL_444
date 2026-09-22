@@ -37,7 +37,6 @@ except ImportError:
 
 import argparse
 from datetime import datetime
-from uuid import uuid4
 
 # Путь к модулям дня: добавляем каталог скрипта в sys.path, чтобы импорты
 # core.* и memory.* работали независимо от того, откуда запущен скрипт.
@@ -49,10 +48,11 @@ from dotenv import load_dotenv
 # Импортируем слои дня из модулей (абстракции, фасады, менеджер).
 from storage.store import Store, safe_name
 from storage.db import ProfileRepository
-from memory.base import MemoryContext, MemoryItem
-from memory.manager import MemoryManager, default_layers, LAYER_ORDER
-from core.llm_client import RouterAIClient, MockClient, LLMClient, MODEL
-from core.prompt_builder import PromptBuilder
+from memory.base import MemoryContext
+from memory.manager import MemoryManager, default_layers
+from core.llm_client import (RouterAIClient, MockClient, MODEL_CONTEXT_LIMIT,
+                             PRICE_IN_PER_M, PRICE_OUT_PER_M)
+from core.prompt_builder import PromptBuilder, DELIVERABLE
 from core.agent import Agent, StubExecutor
 from core.state_machine import TaskStage, ALLOWED_TRANSITIONS
 from core.invariants import Invariant, ConstraintSet
@@ -74,7 +74,7 @@ parser.add_argument("--user", type=str, default=None,
                     help="Идентификатор пользователя (без него — спросит на старте).")
 parser.add_argument("--profile", type=str, default=None,
                     help="Активный профиль на старте (несуществующий → предупреждение и default).")
-parser.add_argument("--deliver", type=str, default="profile,long_term,working,short_term",
+parser.add_argument("--deliver", type=str, default="profile,invariants,long_term,working,short_term",
                     help="Набор слоёв для доставки в промт (через запятую).")
 parser.add_argument("--mock", action="store_true",
                     help="Режим MockClient: ответы от заглушки, ключ не нужен.")
@@ -86,9 +86,14 @@ parser.add_argument("--token-log", type=str, default="tokens.csv",
                     help="CSV-журнал токенов и стоимости (по умолчанию tokens.csv).")
 parser.add_argument("--max-tokens", type=int, default=None,
                     help="Лимит длины ответа модели.")
-parser.add_argument("--price-in", type=float, default=11.0,
+parser.add_argument("--budget", type=int, default=None,
+                    help="Лимит входящих токенов промта: необязательные блоки "
+                         "опускаются (роль и текущий запрос — всегда). Ориентир для "
+                         "ручного значения — MODEL_CONTEXT_LIMIT (%d) минус резерв "
+                         "под ответ. По умолчанию выключен." % MODEL_CONTEXT_LIMIT)
+parser.add_argument("--price-in", type=float, default=PRICE_IN_PER_M,
                     help="Цена 1M входящих токенов в рублях (по умолчанию 11).")
-parser.add_argument("--price-out", type=float, default=33.0,
+parser.add_argument("--price-out", type=float, default=PRICE_OUT_PER_M,
                     help="Цена 1M исходящих токенов в рублях (по умолчанию 33).")
 parser.add_argument("--memory-dir", type=str, default=None,
                     help="Каталог хранилища памяти (по умолчанию users/ рядом с кодом).")
@@ -546,8 +551,13 @@ def main():
 
     # Применяем --deliver (набор слоёв по умолчанию).
     deliver = {part.strip() for part in args.deliver.split(",") if part.strip()}
-    agent.deliver = deliver & set(LAYER_ORDER)
+    agent.deliver = deliver & set(DELIVERABLE)
+    # Бюджет промта: None — обрезание выключено (поведение не меняется).
+    agent.prompt_budget = args.budget
     print(f"[Режим] Доставка слоёв: {sorted(agent.deliver)}")
+    if args.budget is not None:
+        print(f"[Режим] Бюджет промта: {args.budget} токенов "
+              f"(необязательные блоки опускаются)")
     if args.mock:
         print("[Режим] MockClient (заглушка) — живых запросов к API не будет.")
     print("Команды: /memory /profile [list|show|use|new|route|auto] /tasks /task [retry] "
@@ -638,7 +648,7 @@ def main():
                         print("[Доставка] Укажите слои: /deliver profile,working\n")
                         continue
                     chosen = {p.strip() for p in parts[1].split(",") if p.strip()}
-                    agent.deliver = chosen & set(LAYER_ORDER)
+                    agent.deliver = chosen & set(DELIVERABLE)
                     print(f"[Доставка] Теперь: {sorted(agent.deliver)}\n")
                     continue
                 if command == "/compare":

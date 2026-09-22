@@ -13,10 +13,8 @@
 Агент не владеет файлами/БД напрямую: работает через MemoryManager и PromptBuilder
 (инкапсуляция через фасады, arch_prim R3).
 """
-import os
 from dataclasses import asdict
 from datetime import datetime
-from uuid import uuid4
 
 from memory.base import MemoryContext, MemoryItem
 from memory.manager import MemoryManager
@@ -26,6 +24,8 @@ from core.llm_client import LLMClient
 from core.profile_router import ProfileRouter
 from core.state_machine import (
     TaskStage, TaskState, run_task, pause_task, resume_task, transition,
+    approve_plan, try_transition, can_transition, refusal_text,
+    InvalidTransitionError,
 )
 from core.invariants import (
     ConstraintSet, ProposedAction, Invariant, InvariantChecker, RuleBasedChecker,
@@ -160,9 +160,8 @@ def default_action_analyzer() -> TextActionAnalyzer:
 
 
 class Agent:
-    ROLES = {
-        "short_term": "user",   # краткосрочная пишет реплики user/assistant
-    }
+    # Роль реплики → source для MemoryItem (единый источник соответствия).
+    ROLES = {"user": "user", "assistant": "model"}
 
     def __init__(self, llm: LLMClient, memory: MemoryManager, prompts: PromptBuilder,
                  store, user_id: str = None, default_task: str = None, log=None,
@@ -181,6 +180,10 @@ class Agent:
         # Набор включаемых блоков промта; invariants — отдельный блок (День 14),
         # включается наравне со слоями памяти (дозированная доставка сохраняется).
         self.deliver = {"profile", "invariants", "long_term", "working", "short_term"}
+        # Бюджет промта (входящие токены, локальная оценка): None — обрезание
+        # выключено (поведение дней 11–14 не меняется); число — необязательные
+        # блоки опускаются при превышении (роль и текущий запрос — всегда).
+        self.prompt_budget = None
 
         # Персонализация: активный профиль сессии (None → default), авто-роутинг
         # и детерминированный роутер профилей (только если у store есть репозиторий).
@@ -212,24 +215,6 @@ class Agent:
         self.initialized = False
 
     # --- Идентификация и интервью-инициализация ----------------------------------
-    def identify(self, requested_user: str = None) -> str:
-        """Возвращает user_id; при новом ID запускает интервью и создаёт дерево."""
-        profile_repo = self.store.profile_repo
-        user_id = requested_user or self.user_id
-
-        if user_id and profile_repo is not None and profile_repo.exists(user_id):
-            self.user_id = user_id
-            self.initialized = True
-            return user_id
-
-        # Новый или незаданный ID → интервью.
-        if not user_id:
-            user_id = requested_user or self.user_id
-
-        # Интервью предполагает интерактивный ввод; здесь он вызывается через CLI.
-        # Агент предоставляет интервью-вопросы и сохраняет ответы.
-        return user_id or ""
-
     def interview_questions(self) -> list:
         """Три вопроса персонализации (стиль / констрейнты / контекст)."""
         return [
@@ -312,10 +297,7 @@ class Agent:
             self.task_state = None
             return
         try:
-            data["stage"] = TaskStage(data["stage"])
-            if data.get("previous_stage"):
-                data["previous_stage"] = TaskStage(data["previous_stage"])
-            self.task_state = TaskState(**data)
+            self.task_state = TaskState.from_dict(data)
             self.log(f"[Автомат] загружено состояние «{self.task}»: {self.task_state.stage.value} "
                      f"(шаг {self.task_state.current_step}/{len(self.task_state.steps)})")
         except (ValueError, KeyError, TypeError):
@@ -325,10 +307,7 @@ class Agent:
         """Единая точка персистентности: сейв task_state.json + зеркало current_state."""
         if self.task_state is None or not self.user_id:
             return
-        data = asdict(self.task_state)
-        data["stage"] = self.task_state.stage.value
-        data["previous_stage"] = (self.task_state.previous_stage.value
-                                  if self.task_state.previous_stage else None)
+        data = self.task_state.to_dict()
         self.store.write_task_state(self.user_id, self.task, data)
         # Зеркало стадии в working_memory.json (обратная совместимость с днями 11–12).
         ctx = MemoryContext(self.user_id, self.task, self.session_id)
@@ -337,10 +316,14 @@ class Agent:
                             source="system"))
 
     def start_task(self, objective: str) -> TaskState:
-        """Новая задача: task_id по цели, stage=PLANNING, отметки в памяти, сейв."""
+        """Новая задача: task_id по цели, stage=NEW, отметки в памяти, сейв.
+
+        Поток Дня 15: new → planning (план строится) → остановка на утверждении
+        (/approve) — реализация только после явного утверждения человеком.
+        """
         task_id = safe_name(objective) or self.default_task
         self.task_state = TaskState(task_id=task_id, objective=objective,
-                                    stage=TaskStage.PLANNING)
+                                    stage=TaskStage.NEW)
         # Отметка в рабочей и долговременной памяти (механика switch_task дня 11).
         self.memory.remember(
             "working", MemoryContext(self.user_id, self.task, self.session_id),
@@ -363,21 +346,29 @@ class Agent:
         return self.task_state
 
     def run_to_end(self, max_passes: int = 50) -> TaskState:
-        """Крутить автомат до done/failed/paused (с защитой от бесконечного цикла)."""
+        """Крутить автомат до done/failed/paused (с защитой от бесконечного цикла).
+
+        Из planning останавливается: утверждение плана — контрольный пункт,
+        который проходит только человек (/approve), /run его не обходит.
+        """
         if self.task_state is None:
             self.log("[Автомат] /run: нет активной задачи (сначала /plan <цель>)")
             return None
         passes = 0
         while (self.task_state.stage not in
-               (TaskStage.DONE, TaskStage.FAILED, TaskStage.PAUSED)
+               (TaskStage.DONE, TaskStage.FAILED, TaskStage.PAUSED,
+                TaskStage.PLANNING)
                and passes < max_passes):
             run_task(self.task_state, self.executor, self.validator, log=self.log)
             self._persist_task_state()
             passes += 1
+        if self.task_state.stage == TaskStage.PLANNING:
+            self.log("[Автомат] /run: план ожидает утверждения (/approve) — "
+                     "переход в реализацию без утверждения запрещён")
         return self.task_state
 
     def pause(self) -> bool:
-        """Пауза на любом рабочем этапе. False — если задачи нет / не на рабочем этапе."""
+        """Пауза на любой рабочей стадии. False — если задачи нет / не на рабочей стадии."""
         if self.task_state is None:
             self.log("[Автомат] /pause: нет активной задачи")
             return False
@@ -385,7 +376,7 @@ class Agent:
             self.log(f"[Автомат] /pause: нельзя pause на этапе "
                      f"{self.task_state.stage.value}")
             return False
-        pause_task(self.task_state)
+        pause_task(self.task_state, log=self.log)
         self._persist_task_state()
         self.log(f"[Автомат] пауза (вернуться к: "
                  f"{self.task_state.previous_stage.value})")
@@ -400,7 +391,7 @@ class Agent:
             self.log(f"[Автомат] /resume: задача не на паузе "
                      f"(этап {self.task_state.stage.value})")
             return False
-        resume_task(self.task_state)
+        resume_task(self.task_state, log=self.log)
         self._persist_task_state()
         self.log(f"[Автомат] продолжение: этап {self.task_state.stage.value}, "
                  f"шаг {self.task_state.current_step}/{len(self.task_state.steps)}")
@@ -416,9 +407,83 @@ class Agent:
         self.task_state.results = []
         self.task_state.current_step = 0
         self.task_state.error = None
-        self.task_state.expected_action = None
+        self.task_state.expected_action = "утвердить план (/approve)"
         self._persist_task_state()
         return True
+
+    # --- Контролируемые переходы (День 15) ---------------------------------------
+    def approve_plan(self) -> str:
+        """Утверждение плана (/approve): planning → plan_approved.
+
+        Из других стадий — отказ с объяснением (состояние не меняется).
+        Возвращает текст результата для CLI.
+        """
+        if self.task_state is None:
+            message = "[Автомат] /approve: нет активной задачи (сначала /plan <цель>)"
+            self.log(message)
+            return message
+        message = approve_plan(self.task_state, log=self.log)
+        self._persist_task_state()
+        return message
+
+    def attempt_transition(self, target: str) -> str:
+        """Попытка явного перехода (/goto <этап>): try_transition + отказ с правилом.
+
+        Допустимый переход — выполняется; недопустимый — InvalidTransitionError:
+        состояние НЕ меняется, попытка в transition_log, отказ называет правило
+        и корректный следующий шаг. Возвращает текст результата для CLI.
+        """
+        if self.task_state is None:
+            message = "[Автомат] /goto: нет активной задачи (сначала /plan <цель>)"
+            self.log(message)
+            return message
+        try:
+            proposed = TaskStage(target.strip().lower())
+        except ValueError:
+            known = ", ".join(s.value for s in TaskStage)
+            message = f"[Автомат] /goto: неизвестная стадия «{target}». Стадии: {known}"
+            self.log(message)
+            return message
+        try:
+            try_transition(self.task_state, proposed)
+            self._persist_task_state()
+            message = (f"[Автомат] переход выполнен: "
+                       f"{self.task_state.transition_log[-1]['from']} → {proposed.value}")
+            self.log(message)
+            return message
+        except InvalidTransitionError:
+            rule = refusal_text(self.task_state.stage, proposed)
+            self._persist_task_state()
+            message = (f"[Автомат] Попытка перехода {self.task_state.stage.value} → "
+                       f"{proposed.value}: ОТКАЗАНО\n"
+                       f"[Автомат] Правило: {rule}\n"
+                       f"[Автомат] Состояние не изменено: {self.task_state.stage.value}")
+            self.log(f"[Автомат] Попытка {self.task_state.stage.value} → "
+                     f"{proposed.value}: ОТКАЗАНО — {rule}")
+            return message
+
+    def transitions_report(self) -> str:
+        """Карта разрешённых переходов + журнал transition_log (для /transitions)."""
+        from core.state_machine import ALLOWED_TRANSITIONS
+        lines = ["[Переходы] Карта разрешённых переходов:"]
+        for stage in TaskStage:
+            targets = ALLOWED_TRANSITIONS.get(stage, set())
+            names = ", ".join(t.value for t in sorted(targets, key=lambda s: s.value)) or "—"
+            marker = " ← текущая" if (self.task_state is not None
+                                      and self.task_state.stage == stage) else ""
+            lines.append(f"  {stage.value} → {names}{marker}")
+        if self.task_state is None:
+            lines.append("[Переходы] Нет активной задачи (журнал пуст)")
+            return "\n".join(lines)
+        log = self.task_state.transition_log
+        refused = sum(1 for entry in log if not entry.get("allowed"))
+        lines.append(f"[Переходы] Журнал ({len(log)} записей, отказов: {refused}):")
+        for entry in log[-10:]:
+            verdict = "OK" if entry.get("allowed") else "ОТКАЗАНО"
+            reason = f" — {entry['reason']}" if entry.get("reason") else ""
+            lines.append(f"  [{entry['at']}] {entry['from']} → {entry['to']}: "
+                         f"{verdict}{reason}")
+        return "\n".join(lines)
 
     # --- Инварианты и ограничения состояния (День 14) ----------------------------
     def load_constraints(self) -> None:
@@ -542,12 +607,9 @@ class Agent:
         # Дозированная доставка: блоки только для выбранных слоёв.
         blocks = self.memory.build_blocks(self.deliver, ctx)
 
-        # Краткосрочная память — сообщения как список role/content.
-        short_term = self.memory.layers["short_term"].read(ctx)
-        short_messages = [
-            {"role": m.get("role", "user"), "content": m.get("content", "")}
-            for m in short_term.get("messages", [])[-10:]
-        ]
+        # Краткосрочная память — сообщения как список role/content
+        # (окно — у слоя ShortTermMemory, единственный владелец).
+        short_messages = self.memory.layers["short_term"].recent(ctx)
 
         summary = self.store.read_sessions_resume(self.user_id, self.task)
         return PromptContext(query, blocks, summary=summary,
@@ -569,9 +631,11 @@ class Agent:
         # 1. Явное сохранение сообщения в краткосрочную память (source=user).
         self.remember_message("user", user_message, message_id)
 
-        # 2. Сборка промта (дозированная доставка: только слои из self.deliver).
+        # 2. Сборка промта (дозированная доставка: только слои из self.deliver;
+        #    бюджет: None — без обрезания, число — необязательные блоки опускаются).
         prompt_ctx = self.build_context(user_message)
-        messages = self.prompts.build(prompt_ctx, self.deliver)
+        messages = self.prompts.build(prompt_ctx, self.deliver,
+                                      budget=self.prompt_budget)
 
         # 3. Ответ LLM.
         answer = self.llm.complete(messages)
@@ -585,11 +649,13 @@ class Agent:
 
     def remember_message(self, role: str, content: str, message_id: str) -> str:
         """Сохраняет реплику в краткосрочную память (append-only)."""
+        if role not in self.ROLES:      # защита от опечатки/дрейфа роли
+            role = "user"
+        source = self.ROLES[role]
         ctx = MemoryContext(self.user_id, self.task, self.session_id)
         item = MemoryItem(
-            content=content, source="user" if role == "user" else "model",
-            scope="session", owner=self.user_id, source_message_id=message_id,
-            role=role,
+            content=content, source=source, scope="session", owner=self.user_id,
+            source_message_id=message_id, role=role,
         )
         return self.memory.layers["short_term"].write(ctx, item)
 

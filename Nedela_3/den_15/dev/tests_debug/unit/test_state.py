@@ -1,10 +1,11 @@
 # -*- coding: utf-8 -*-
-"""Юнит-тесты state machine: этапы, разрешённые/запрещённые переходы.
+"""Юнит-тесты state machine: этапы, разрешённые/запрещённые переходы (День 15).
 
-Мигрировано с задела дней 11–12 (Enum TaskState из 4 стадий) на канон Дня 13:
-Enum этапов — TaskStage (6: 4 базовых + paused/failed как расширения), проверка
-переходов — next_state()/ALLOWED_TRANSITIONS. Полный автомат (dataclass TaskState,
-pause/resume, save/load, run_task) покрыт в test_fsm.py.
+Мигрировано с Дня 13 (next_state) на канон Дня 15: TaskStage — 8 состояний,
+проверка переходов — can_transition()/ALLOWED_TRANSITIONS. Полный автомат
+(dataclass TaskState, pause/resume, save/load, run_task, try_transition,
+InvalidTransitionError, transition_log) покрыт в test_fsm.py и
+test_transitions.py.
 """
 import os
 import sys
@@ -12,30 +13,39 @@ import sys
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 sys.path.insert(0, BASE_DIR)
 
-from core.state_machine import TaskStage, ALLOWED_TRANSITIONS, next_state
+from core.state_machine import TaskStage, ALLOWED_TRANSITIONS, can_transition
 
 
-def test_four_stages():
-    # Канон: 4 базовых этапа присутствуют (расширяем, не сужаем) + paused/failed.
-    base = {"planning", "execution", "validation", "done"}
+def test_eight_stages():
+    # Канон Дня 15: 8 допустимых состояний (4 базовых детализированы + расширения).
+    base = {"planning", "implementation", "validation", "done"}
     values = {s.value for s in TaskStage}
     assert base <= values
-    assert values == base | {"paused", "failed"}
+    assert values == base | {"new", "plan_approved", "paused", "failed"}
 
 
 def test_allowed_transitions():
-    assert next_state(TaskStage.PLANNING, TaskStage.EXECUTION)
-    assert next_state(TaskStage.EXECUTION, TaskStage.VALIDATION)
-    assert next_state(TaskStage.EXECUTION, TaskStage.PLANNING)
-    assert next_state(TaskStage.VALIDATION, TaskStage.EXECUTION)
-    assert next_state(TaskStage.VALIDATION, TaskStage.PLANNING)
-    assert next_state(TaskStage.VALIDATION, TaskStage.DONE)
+    assert can_transition(TaskStage.NEW, TaskStage.PLANNING)
+    assert can_transition(TaskStage.PLANNING, TaskStage.PLAN_APPROVED)
+    assert can_transition(TaskStage.PLAN_APPROVED, TaskStage.IMPLEMENTATION)
+    assert can_transition(TaskStage.PLAN_APPROVED, TaskStage.PLANNING)
+    assert can_transition(TaskStage.IMPLEMENTATION, TaskStage.VALIDATION)
+    assert can_transition(TaskStage.IMPLEMENTATION, TaskStage.PLANNING)
+    assert can_transition(TaskStage.VALIDATION, TaskStage.DONE)
+    assert can_transition(TaskStage.VALIDATION, TaskStage.IMPLEMENTATION)
+    assert can_transition(TaskStage.VALIDATION, TaskStage.PLANNING)
 
 
 def test_forbidden_transitions():
-    assert not next_state(TaskStage.PLANNING, TaskStage.DONE)
-    assert not next_state(TaskStage.DONE, TaskStage.PLANNING)
-    assert not next_state(TaskStage.PLANNING, TaskStage.VALIDATION)
+    # «нельзя реализацию до утверждённого плана» — дуги нет.
+    assert not can_transition(TaskStage.NEW, TaskStage.IMPLEMENTATION)
+    assert not can_transition(TaskStage.PLANNING, TaskStage.IMPLEMENTATION)
+    # «нельзя финал без валидации» — в DONE только из VALIDATION.
+    assert not can_transition(TaskStage.PLANNING, TaskStage.DONE)
+    assert not can_transition(TaskStage.PLAN_APPROVED, TaskStage.DONE)
+    assert not can_transition(TaskStage.IMPLEMENTATION, TaskStage.DONE)
+    assert not can_transition(TaskStage.DONE, TaskStage.PLANNING)
+    assert not can_transition(TaskStage.PLANNING, TaskStage.VALIDATION)
 
 
 def test_done_terminal():
@@ -47,6 +57,7 @@ def test_paused_and_failed_extensions():
     assert ALLOWED_TRANSITIONS[TaskStage.PAUSED] == set()
     # failed — восстановление только явным переходом в planning (/task retry).
     assert ALLOWED_TRANSITIONS[TaskStage.FAILED] == {TaskStage.PLANNING}
-    # пауза допустима с любого рабочего этапа.
-    for stage in (TaskStage.PLANNING, TaskStage.EXECUTION, TaskStage.VALIDATION):
-        assert next_state(stage, TaskStage.PAUSED)
+    # пауза допустима с любой рабочей стадии (включая новые NEW/PLAN_APPROVED).
+    for stage in (TaskStage.NEW, TaskStage.PLANNING, TaskStage.PLAN_APPROVED,
+                  TaskStage.IMPLEMENTATION, TaskStage.VALIDATION):
+        assert can_transition(stage, TaskStage.PAUSED)

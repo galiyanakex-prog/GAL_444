@@ -37,7 +37,6 @@ except ImportError:
 
 import argparse
 from datetime import datetime
-from uuid import uuid4
 
 # Путь к модулям дня: добавляем каталог скрипта в sys.path, чтобы импорты
 # core.* и memory.* работали независимо от того, откуда запущен скрипт.
@@ -49,10 +48,11 @@ from dotenv import load_dotenv
 # Импортируем слои дня из модулей (абстракции, фасады, менеджер).
 from storage.store import Store, safe_name
 from storage.db import ProfileRepository
-from memory.base import MemoryContext, MemoryItem
-from memory.manager import MemoryManager, default_layers, LAYER_ORDER
-from core.llm_client import RouterAIClient, MockClient, LLMClient, MODEL
-from core.prompt_builder import PromptBuilder
+from memory.base import MemoryContext
+from memory.manager import MemoryManager, default_layers
+from core.llm_client import (RouterAIClient, MockClient, MODEL_CONTEXT_LIMIT,
+                             PRICE_IN_PER_M, PRICE_OUT_PER_M)
+from core.prompt_builder import PromptBuilder, DELIVERABLE
 from core.agent import Agent, StubExecutor
 from core.state_machine import TaskStage, ALLOWED_TRANSITIONS
 from core.invariants import Invariant, ConstraintSet
@@ -74,7 +74,7 @@ parser.add_argument("--user", type=str, default=None,
                     help="Идентификатор пользователя (без него — спросит на старте).")
 parser.add_argument("--profile", type=str, default=None,
                     help="Активный профиль на старте (несуществующий → предупреждение и default).")
-parser.add_argument("--deliver", type=str, default="profile,long_term,working,short_term",
+parser.add_argument("--deliver", type=str, default="profile,invariants,long_term,working,short_term",
                     help="Набор слоёв для доставки в промт (через запятую).")
 parser.add_argument("--mock", action="store_true",
                     help="Режим MockClient: ответы от заглушки, ключ не нужен.")
@@ -86,9 +86,14 @@ parser.add_argument("--token-log", type=str, default="tokens.csv",
                     help="CSV-журнал токенов и стоимости (по умолчанию tokens.csv).")
 parser.add_argument("--max-tokens", type=int, default=None,
                     help="Лимит длины ответа модели.")
-parser.add_argument("--price-in", type=float, default=11.0,
+parser.add_argument("--budget", type=int, default=None,
+                    help="Лимит входящих токенов промта: необязательные блоки "
+                         "опускаются (роль и текущий запрос — всегда). Ориентир для "
+                         "ручного значения — MODEL_CONTEXT_LIMIT (%d) минус резерв "
+                         "под ответ. По умолчанию выключен." % MODEL_CONTEXT_LIMIT)
+parser.add_argument("--price-in", type=float, default=PRICE_IN_PER_M,
                     help="Цена 1M входящих токенов в рублях (по умолчанию 11).")
-parser.add_argument("--price-out", type=float, default=33.0,
+parser.add_argument("--price-out", type=float, default=PRICE_OUT_PER_M,
                     help="Цена 1M исходящих токенов в рублях (по умолчанию 33).")
 parser.add_argument("--memory-dir", type=str, default=None,
                     help="Каталог хранилища памяти (по умолчанию users/ рядом с кодом).")
@@ -102,7 +107,9 @@ TOKEN_LOG = os.path.join(BASE_DIR, args.token_log) if not os.path.isabs(args.tok
 # 4. Роль агента ---------------------------------------------------------------
 SYSTEM_PROMPT = (
     "Ты полезный ассистент с явной моделью памяти. Отвечай кратко на русском языке, "
-    "учитывая переданные блоки памяти. Если блок памяти отсутствует — отвечай без него."
+    "учитывая переданные блоки памяти. Если блок памяти отсутствует — отвечай без него. "
+    "Работай в рамках текущего этапа задачи, не перепрыгивай этапы; переходы "
+    "контролирует код."
 )
 
 # 5. Локальная оценка токенов (для /tokens, /cost, CSV; авторитет — usage живого API) ---
@@ -194,9 +201,12 @@ def print_help():
     print("  /tasks               — список задач + активная задача")
     print("  /task <имя>          — переключить/создать задачу (с отметкой перехода)")
     print("  /task retry          — повтор задачи из состояния failed (→ planning)")
-    print("  /plan <цель>         — новая задача: LLM составляет план (→ execution)")
+    print("  /plan <цель>         — новая задача: план строится и ожидает утверждения")
+    print("  /approve             — утвердить план (planning → plan_approved)")
+    print("  /goto <этап>         — попытка явного перехода (демо контроля переходов)")
+    print("  /transitions         — карта переходов + журнал попыток и отказов")
     print("  /step                — один шаг автомата (снимок: этап/шаг/действие)")
-    print("  /run                 — крутить автомат до done/failed")
+    print("  /run                 — крутить автомат до done/failed (не обходит /approve)")
     print("  /pause               — пауза на любом рабочем этапе (состояние сохраняется)")
     print("  /resume              — продолжение с того же шага, без повторных объяснений")
     print("  /deliver <слои>      — набор включаемых слоёв (напр. profile,working)")
@@ -356,7 +366,7 @@ def compare_demonstration(agent: Agent, exchange_tracker):
 
 # 12. Показать state machine -------------------------------------------------------
 def show_state(agent: Agent):
-    """Полный снимок TaskState (если задача есть) + карта разрешённых переходов."""
+    """Полный снимок TaskState + карта переходов + разрешённые из текущей + отказы."""
     st = agent.task_state
     if st is not None:
         steps = st.steps or []
@@ -375,15 +385,21 @@ def show_state(agent: Agent):
         if st.error:
             print(f"  Ошибка: {st.error}")
         print(f"  Результатов собрано: {len(st.results)}")
+        allowed = ALLOWED_TRANSITIONS.get(st.stage, set())
+        names = ", ".join(t.value for t in sorted(allowed, key=lambda s: s.value)) or "—"
+        print(f"  Разрешённые переходы из {st.stage.value}: {names}")
+        refused = sum(1 for e in st.transition_log if not e.get("allowed"))
+        print(f"  Отказов в журнале переходов: {refused}")
         print()
     else:
         print("[Состояние задачи] Нет активной задачи (создайте: /plan <цель>)\n")
     print("[State machine] Этапы и разрешённые переходы:")
     for stage in TaskStage:
         targets = ALLOWED_TRANSITIONS.get(stage, set())
-        names = ", ".join(t.value for t in targets) or "—"
+        names = ", ".join(t.value for t in sorted(targets, key=lambda s: s.value)) or "—"
         print(f"  {stage.value} → {names}")
     print()
+
 
 
 # 12.1 Печать снимка автомата после команд жизненного цикла ------------------------
@@ -546,13 +562,18 @@ def main():
 
     # Применяем --deliver (набор слоёв по умолчанию).
     deliver = {part.strip() for part in args.deliver.split(",") if part.strip()}
-    agent.deliver = deliver & set(LAYER_ORDER)
+    agent.deliver = deliver & set(DELIVERABLE)
+    # Бюджет промта: None — обрезание выключено (поведение не меняется).
+    agent.prompt_budget = args.budget
     print(f"[Режим] Доставка слоёв: {sorted(agent.deliver)}")
+    if args.budget is not None:
+        print(f"[Режим] Бюджет промта: {args.budget} токенов "
+              f"(необязательные блоки опускаются)")
     if args.mock:
         print("[Режим] MockClient (заглушка) — живых запросов к API не будет.")
     print("Команды: /memory /profile [list|show|use|new|route|auto] /tasks /task [retry] "
-          "/plan /step /run /pause /resume /deliver /compare /summary /state /tokens "
-          "/cost /help /exit\n")
+          "/plan /approve /goto /transitions /step /run /pause /resume /deliver /compare "
+          "/summary /state /tokens /cost /help /exit\n")
 
     # Главный цикл.
     while True:
@@ -606,9 +627,23 @@ def main():
                         continue
                     objective = parts[1].strip()
                     agent.start_task(objective)
-                    # Первый проход автомата: LLM составляет план (planning → execution).
+                    # Первый проход: new → planning (план построен, ожидает /approve).
                     agent.step_task()
                     print_task_snapshot(agent, "План")
+                    continue
+                if command == "/approve":
+                    print(agent.approve_plan() + "\n")
+                    continue
+                if command == "/goto":
+                    parts = user_input.split(maxsplit=1)
+                    if len(parts) < 2 or not parts[1].strip():
+                        stages = ", ".join(s.value for s in TaskStage)
+                        print(f"[Переход] Укажите стадию: /goto <этап>. Стадии: {stages}\n")
+                        continue
+                    print(agent.attempt_transition(parts[1].strip()) + "\n")
+                    continue
+                if command == "/transitions":
+                    print(agent.transitions_report() + "\n")
                     continue
                 if command == "/step":
                     if agent.task_state is None:
@@ -638,7 +673,7 @@ def main():
                         print("[Доставка] Укажите слои: /deliver profile,working\n")
                         continue
                     chosen = {p.strip() for p in parts[1].split(",") if p.strip()}
-                    agent.deliver = chosen & set(LAYER_ORDER)
+                    agent.deliver = chosen & set(DELIVERABLE)
                     print(f"[Доставка] Теперь: {sorted(agent.deliver)}\n")
                     continue
                 if command == "/compare":

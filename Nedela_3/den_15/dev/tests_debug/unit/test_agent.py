@@ -75,3 +75,54 @@ def test_switch_task(tmp_path):
     lt = agent.memory.layers["long_term"].read(MemoryContext("u4"))
     names = [t.get("name") for t in lt["tasks"] if isinstance(t, dict)]
     assert "Новая_задача" in names
+
+
+def test_agent_deliver_keeps_invariants(tmp_path):
+    # Регрессия бага A1: дефолтный deliver агента содержит invariants, и при
+    # непустом наборе правил блок [system: invariants] попадает в промт.
+    from core.invariants import Invariant
+    agent = make_agent(tmp_path)
+    agent.initialize_user("u5", "Ева", {"style": "a", "constraints": "b", "context": "c"})
+    assert "invariants" in agent.deliver
+    agent.add_invariant(Invariant(id="framework.django", category="architecture",
+                                  description="Использовать Django"))
+    prompt_ctx = agent.build_context("вопрос")
+    messages = agent.prompts.build(prompt_ctx, agent.deliver)
+    joined = " ".join(m["content"] for m in messages)
+    assert "Обязательные инварианты:" in joined
+    assert "framework.django" in joined
+
+
+def test_prompt_budget_passed_in_respond(tmp_path):
+    # Проводка бюджета в рабочем пути (A3): prompt_budget=1 опускает
+    # необязательный блок (profile), роль и текущий запрос остаются.
+    agent = make_agent(tmp_path)
+    agent.initialize_user("u6", "Жан", {"style": "a", "constraints": "b", "context": "c"})
+    agent.prompt_budget = 1
+    agent.respond("вопрос")
+    last_messages = agent.llm.calls[-1]
+    joined = " ".join(m["content"] for m in last_messages)
+    assert "[profile]" not in joined          # необязательный блок опущен
+    assert last_messages[-1]["content"] == "вопрос"   # запрос — всегда
+    assert last_messages[0]["role"] == "system"       # роль — всегда
+    # Контроль: без бюджета (None) блок profile присутствует.
+    agent.prompt_budget = None
+    agent.respond("вопрос2")
+    joined2 = " ".join(m["content"] for m in agent.llm.calls[-1])
+    assert "[profile]" in joined2
+
+
+def test_roles_mapping_in_session(tmp_path):
+    # ROLES — единый источник соответствия роль→source (A5): user-реплика
+    # пишется с source="user", assistant — с source="model".
+    from memory.base import MemoryContext
+    agent = make_agent(tmp_path)
+    agent.initialize_user("u7", "Зоя", {"style": "a", "constraints": "b", "context": "c"})
+    agent.respond("привет")
+    session = agent.memory.layers["short_term"].read(
+        MemoryContext("u7", agent.task, agent.session_id))
+    msgs = session["messages"]
+    assert len(msgs) == 2
+    by_role = {m["role"]: m for m in msgs}
+    assert by_role["user"]["source"] == "user"
+    assert by_role["assistant"]["source"] == "model"

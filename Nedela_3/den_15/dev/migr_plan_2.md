@@ -1,10 +1,11 @@
-# migr_plan_2.md — рабочий план этапа M2 «Хранение инвариантов»
+# migr_plan_2.md — рабочий план этапа M2 «Хранение: transition_log + миграция снимков»
 
-> **Роль документа.** Рабочий план-алгоритм **одного этапа** миграции проекта `den_14` на
-> целевую архитектуру `Nedela_3/den_14/arch_den_14.md`. Разворачивает строку этапа **M2** из
-> `migr_plan.md` §4 в конкретные правки и проверки.
+> **Роль документа.** Рабочий план-алгоритм **одного этапа** миграции проекта `den_15`
+> на целевую архитектуру `Nedela_3/den_15/arch_den_15.md`. Разворачивает этап **M2** из
+> `migr_plan.md` §4. Закрывает персистентность журнала переходов и обратную
+> совместимость снимков (`arch_den_15.md` §2.7–2.8).
 > **Конец этого этапа — автоматический гейт в этап M3** (`migr_plan_3.md`).
-> Источники: `migr_plan.md` (эталон), `arch_den_14.md` §2.5–2.6, `Задание_Д14.txt`.
+> Источники: `migr_plan.md` (эталон), `arch_den_15.md` §2.7–2.8.
 
 ---
 
@@ -12,145 +13,110 @@
 
 | Поле | Значение |
 |---|---|
-| Этап | **M2** — Хранение инвариантов |
+| Этап | **M2** — Хранение: transition_log + миграция снимков |
 | Рабочий план | `dev/migr_plan_2.md` (этот файл) |
-| Зависит от | **M1** (ядро `core/invariants.py`) |
-| Открывает | `dev/migr_plan_3.md` (M3 — Инжект в промт) |
-| Основной артефакт | методы в `storage/store.py`; файл `users/<id>/tasks/<task>/invariants.json` |
-| Живой ключ | **Не нужен** (сериализация/чтение файлов) |
+| Зависит от | **M1** (TaskState.transition_log, from_dict-миграция) |
+| Открывает | `dev/migr_plan_3.md` (M3 — Оркестратор) |
+| Закрывает | `arch_den_15.md` §2.7 (журнал в снимке), §2.8 (миграция снимков, зеркало стадии) |
+| Основные артефакты | `storage/store.py`, `memory/working.py` |
+| Живой ключ | **Не нужен** |
+| Меняет поведение | **Нет** (формат снимка расширяется; старые снимки читаются) |
 
-**Цель этапа.** Отделить инварианты от диалога **физически** — собственный файл `invariants.json`
-в иерархии `users/`, переживающий очистку истории и перезапуск процесса.
+**Цель этапа.** Журнал переходов переживает перезапуск вместе со снимком; снимки дней
+13/14 (`"execution"`, без `transition_log`) мигрируются при загрузке; зеркало
+`current_state` в `working_memory.json` синхронно с новым именем стадии.
 
 ---
 
 ## 1. Вход и предусловия
 
-- Существующий `storage/store.py` (фасад хранилища; контракт дней 11–13 **не менять** —
-  только **добавить** методы).
-- `core/invariants.py` (M1).
-- `arch_den_14.md` §2.5 (снимок `invariants.json`), §2.6 (иерархия хранения).
+- `storage/store.py`: `task_state_path`/`read_task_state`/`write_task_state`
+  (существующие, дня 13).
+- `memory/working.py`: зеркало `current_state` (строка стадии).
+- M1 зелёный (`TaskState.to_dict`/`from_dict` уже сериализуют `transition_log` и
+  мигрируют `"execution"` — если миграция сделана в M1, здесь только сверка).
 
-**Предусловия:** активное `.venv`; файла `invariants.json` в иерархии ещё нет.
+**Предусловия:** фасад `Store` не переписывается — только точечные правки
+сериализации; `db.py` не трогать.
 
 ---
 
 ## 2. Шаги этапа (исполняемый алгоритм)
 
-### Шаг 2.1 — Метод пути `invariants_path`
-Добавить в фасад `storage/store.py`:
-```python
-def invariants_path(self, user_id, task_name) -> str
-    # -> users/<id>/tasks/<task>/invariants.json
-```
-Фасад знает путь; `Agent` — нет (инкапсуляция через фасад).
-**Ожидаемый результат:** метод возвращает корректный абсолютный путь.
+### Шаг 2.1 — `task_state.json`: round-trip `transition_log`
+1. `write_task_state`: снимок включает `transition_log` (через `TaskState.to_dict`).
+2. `read_task_state`: восстановление `transition_log` (через `from_dict`).
+3. **Ожидаемый результат:** save → load → `transition_log` равен (включая записи
+   `allowed=False`).
 
-### Шаг 2.2 — Метод чтения `read_invariants`
-```python
-def read_invariants(self, user_id, task_name) -> dict | None
-    # None — набора ещё нет (не ошибка)
-```
-**Ожидаемый результат:** отсутствующий файл → `None`; существующий → dict.
+### Шаг 2.2 — Миграция снимков дней 13/14
+1. Сверить: `from_dict` переводит `"stage": "execution"` → `IMPLEMENTATION`
+   (сделано в M1; здесь — тест-доказательство на уровне фасада).
+2. Снимок без `transition_log` → `[]`; битый JSON → задача со стадии `NEW`
+   (не падает).
+3. **Ожидаемый результат:** старый снимок дня 14 загружается: стадия
+   `implementation`, журнал пуст.
 
-### Шаг 2.3 — Метод записи `write_invariants`
-```python
-def write_invariants(self, user_id, task_name, data: dict) -> str
-    # создаёт каталоги при необходимости, пишет JSON, возвращает путь
-```
-**Ожидаемый результат:** сейв создаёт/перезаписывает `invariants.json`.
+### Шаг 2.3 — Зеркало `current_state` в `working_memory.json`
+1. `memory/working.py`: зеркало стадии пишется новым значением
+   (`implementation`/`plan_approved`/`new`).
+2. Синхронизация при каждом переходе (точка — `Agent._persist_task_state`,
+   вызов уже существует; проверить, что зеркало берётся из `state.stage.value`).
+3. **Ожидаемый результат:** после перехода в `plan_approved` в
+   `working_memory.json` — `"current_state": "plan_approved"`.
 
-### Шаг 2.4 — Сериализация `ConstraintSet` ↔ JSON
-Реализовать (де)сериализацию по снимку `arch_den_14.md` §2.5:
-```json
-{
-  "invariants": [
-    {"id": "stack.python", "description": "Использовать только Python 3.12",
-     "category": "stack", "severity": "error", "active": true},
-    {"id": "framework.django", "description": "Использовать Django, а не FastAPI или Flask",
-     "category": "architecture", "severity": "error", "active": true},
-    {"id": "dependencies.no-new", "description": "Не добавлять новые внешние зависимости",
-     "category": "technical", "severity": "error", "active": true},
-    {"id": "database.no-schema-changes", "description": "Не изменять схему базы данных",
-     "category": "business", "severity": "error", "active": true}
-  ]
-}
-```
-**Ожидаемый результат:** round-trip `ConstraintSet → JSON → ConstraintSet` без потерь.
+### Шаг 2.4 — Смоук этапа (инлайн, `.tmp/`)
+1. Round-trip: создать `TaskState`, выполнить успешный и отклонённый переход,
+   save → load → сравнить (стадия, шаг, журнал).
+2. Старый снимок (рукописный JSON с `"execution"`, без `transition_log`) → load →
+   `IMPLEMENTATION`, `[]`.
+3. Битый файл → не падает, `NEW`.
+4. **Ожидаемый результат:** все блоки OK; временные файлы только в
+   `dev/tests_debug/.tmp/m2_<ts>/`.
 
-### Шаг 2.5 — Устойчивость (битый/отсутствующий файл)
-Правила:
-- отсутствующий `invariants.json` → **пустой набор** (все действия разрешены, как в днях 11–13);
-- битый JSON / несоответствие схеме → **не роняет приложение**, пустой набор + ворнинг в лог;
-- **очистка истории диалога не удаляет инварианты** (разные файлы: `session.json` ≠
-  `invariants.json`).
-**Ожидаемый результат:** приложение устойчиво к повреждённому файлу.
-
-### Шаг 2.6 — Зафиксировать иерархию хранения (`arch_den_14.md` §2.6)
-Подтвердить итоговое дерево (без правки наследия):
-```text
-users/<user_id>/
-├── profile.json
-├── profiles/
-├── long_term_memory.json
-└── tasks/<task_name>/
-    ├── invariants.json          # ← НОВОЕ: ConstraintSet (неизменяемые правила задачи)
-    ├── task_state.json
-    ├── working_memory.json
-    ├── sessions_resume.md
-    └── sessions/<session_id>/
-        └── session.json
-```
-Разделение ответственности: `session.json` — неизменяемая история; `working_memory.json` —
-состояние памяти задачи; `task_state.json` — жизненный цикл; `invariants.json` —
-неизменяемые правила (4 разные сущности, 4 файла).
+### Шаг 2.5 — Регрессия
+1. L1 → ok; L2 → отклонения только зафиксированные на M1 (`test_fsm` ⚠);
+   `test_storage.py` — зелёный (round-trip прежних полей не сломан);
+   L4/гейт — без новых красных.
+**Ожидаемый результат:** отклонений сверх M1 нет.
 
 ---
 
 ## 3. Выход этапа
 
-- Новые методы в `storage/store.py` (`invariants_path` / `read_invariants` / `write_invariants`).
-- Сериализация `ConstraintSet` ↔ JSON.
-- Файл `invariants.json` появляется в иерархии `users/` при сейве.
+- `storage/store.py` (сериализация `transition_log` — если не полностью в M1).
+- `memory/working.py` (зеркало стадии).
 - Запись этапа **M2** в `dev/migr_log.md`.
 
 ---
 
 ## 4. Автоматический гейт M2→M3
 
-Проверка round-trip и независимости (временный каталог — только в `.tmp/`, `users/` проекта не
-трогать):
-```bash
-python - <<'PY'
-import json, os, tempfile
-from core.invariants import Invariant, ConstraintSet
-# сохранить набор в tmp → прочитать → сравнить
-# удалить session.json → убедиться, что invariants.json на месте
-print("M2 OK")
-PY
-```
-Гейт **зелёный**, если:
-- [ ] `write_invariants` → `read_invariants` даёт **равный** набор (round-trip);
-- [ ] отсутствующий файл → пустой набор (не ошибка);
-- [ ] удаление `session.json` **не** затрагивает `invariants.json`;
-- [ ] битый `invariants.json` не роняет приложение (пустой набор + ворнинг);
-- [ ] контракты `storage/db.py` и наследия не изменены.
+Гейт считается **зелёным**, если одновременно:
+- [ ] round-trip `transition_log` равен (успехи и отказы);
+- [ ] старый снимок `"execution"` → `IMPLEMENTATION`, `transition_log == []`;
+- [ ] битый/отсутствующий `task_state.json` не роняет приложение (стадия `NEW`);
+- [ ] зеркало `current_state` синхронно (`plan_approved`/`implementation`);
+- [ ] L1 зелёный; L2/L4 — отклонения только зафиксированные на M1;
+- [ ] `db.py` и прочие контракты не тронуты.
 
-**Зелёный** → запись M2 в `migr_log.md` (✅) → **перечитать `migr_plan.md`** → открыть
-`migr_plan_3.md`.
-**Красный** → карточка ошибки `dev/logs_reports/errors/error_<ts>.md`, этап M2 остаётся открыт.
+**Зелёный** → запись M2 в `migr_log.md` (✅) → **перечитать `migr_plan.md`** →
+создать `migr_plan_3.md`.
+**Красный** → карточка ошибки, этап M2 открыт.
 
 ---
 
-## 5. Запись в `migr_log.md`
+## 5. Запись в `migr_log.md` (форма §6.4)
 
 ```text
-## Этап M2 — Хранение инвариантов
+## Этап M2 — Хранение: transition_log + миграция снимков
 - Статус: ✅ завершён | ⚠️ обход | ❌ открыт
-- Было: инварианты не хранятся отдельно
-- Стало: storage/store.py (invariants_path/read/write) + invariants.json в users/<id>/tasks/<task>/
-- Проверка: round-trip save→load; отсутствие файла → пустой набор; удаление session.json не влияет, exit-код
-- Артефакты: storage/store.py
+- Было: task_state.json без transition_log; снимки с "execution" не мигрировались;
+  зеркало current_state = "execution"
+- Стало: <round-trip transition_log; миграция execution → implementation;
+  зеркало синхронно>
+- Проверка: <смоук round-trip/миграции/битого файла; L1/L2/L4>
+- Артефакты: storage/store.py, memory/working.py
 - Спорное/риски: <если есть>
 - Перечитывание migr_plan.md перед следующим этапом: ✅ выполнено (дата/время)
 - Гейт M2→M3: ✅ пройден | ❌ не пройден
@@ -160,5 +126,6 @@ PY
 
 ## 6. Следующий шаг
 
-Перечитать `dev/migr_plan.md`, затем **M3** по `dev/migr_plan_3.md` (блок `invariants` в
-`core/prompt_builder.py`).
+Перечитать актуальный `dev/migr_plan.md`, затем приступить к **M3** по
+`dev/migr_plan_3.md` (оркестратор: `approve_plan`/`attempt_transition`/
+`transitions_report`, адаптация жизненного цикла `Agent`, правило роли в промте).

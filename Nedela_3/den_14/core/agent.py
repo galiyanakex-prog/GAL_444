@@ -13,10 +13,8 @@
 Агент не владеет файлами/БД напрямую: работает через MemoryManager и PromptBuilder
 (инкапсуляция через фасады, arch_prim R3).
 """
-import os
 from dataclasses import asdict
 from datetime import datetime
-from uuid import uuid4
 
 from memory.base import MemoryContext, MemoryItem
 from memory.manager import MemoryManager
@@ -160,9 +158,8 @@ def default_action_analyzer() -> TextActionAnalyzer:
 
 
 class Agent:
-    ROLES = {
-        "short_term": "user",   # краткосрочная пишет реплики user/assistant
-    }
+    # Роль реплики → source для MemoryItem (единый источник соответствия).
+    ROLES = {"user": "user", "assistant": "model"}
 
     def __init__(self, llm: LLMClient, memory: MemoryManager, prompts: PromptBuilder,
                  store, user_id: str = None, default_task: str = None, log=None,
@@ -181,6 +178,10 @@ class Agent:
         # Набор включаемых блоков промта; invariants — отдельный блок (День 14),
         # включается наравне со слоями памяти (дозированная доставка сохраняется).
         self.deliver = {"profile", "invariants", "long_term", "working", "short_term"}
+        # Бюджет промта (входящие токены, локальная оценка): None — обрезание
+        # выключено (поведение дней 11–14 не меняется); число — необязательные
+        # блоки опускаются при превышении (роль и текущий запрос — всегда).
+        self.prompt_budget = None
 
         # Персонализация: активный профиль сессии (None → default), авто-роутинг
         # и детерминированный роутер профилей (только если у store есть репозиторий).
@@ -212,24 +213,6 @@ class Agent:
         self.initialized = False
 
     # --- Идентификация и интервью-инициализация ----------------------------------
-    def identify(self, requested_user: str = None) -> str:
-        """Возвращает user_id; при новом ID запускает интервью и создаёт дерево."""
-        profile_repo = self.store.profile_repo
-        user_id = requested_user or self.user_id
-
-        if user_id and profile_repo is not None and profile_repo.exists(user_id):
-            self.user_id = user_id
-            self.initialized = True
-            return user_id
-
-        # Новый или незаданный ID → интервью.
-        if not user_id:
-            user_id = requested_user or self.user_id
-
-        # Интервью предполагает интерактивный ввод; здесь он вызывается через CLI.
-        # Агент предоставляет интервью-вопросы и сохраняет ответы.
-        return user_id or ""
-
     def interview_questions(self) -> list:
         """Три вопроса персонализации (стиль / констрейнты / контекст)."""
         return [
@@ -542,12 +525,9 @@ class Agent:
         # Дозированная доставка: блоки только для выбранных слоёв.
         blocks = self.memory.build_blocks(self.deliver, ctx)
 
-        # Краткосрочная память — сообщения как список role/content.
-        short_term = self.memory.layers["short_term"].read(ctx)
-        short_messages = [
-            {"role": m.get("role", "user"), "content": m.get("content", "")}
-            for m in short_term.get("messages", [])[-10:]
-        ]
+        # Краткосрочная память — сообщения как список role/content
+        # (окно — у слоя ShortTermMemory, единственный владелец).
+        short_messages = self.memory.layers["short_term"].recent(ctx)
 
         summary = self.store.read_sessions_resume(self.user_id, self.task)
         return PromptContext(query, blocks, summary=summary,
@@ -569,9 +549,11 @@ class Agent:
         # 1. Явное сохранение сообщения в краткосрочную память (source=user).
         self.remember_message("user", user_message, message_id)
 
-        # 2. Сборка промта (дозированная доставка: только слои из self.deliver).
+        # 2. Сборка промта (дозированная доставка: только слои из self.deliver;
+        #    бюджет: None — без обрезания, число — необязательные блоки опускаются).
         prompt_ctx = self.build_context(user_message)
-        messages = self.prompts.build(prompt_ctx, self.deliver)
+        messages = self.prompts.build(prompt_ctx, self.deliver,
+                                      budget=self.prompt_budget)
 
         # 3. Ответ LLM.
         answer = self.llm.complete(messages)
@@ -585,11 +567,13 @@ class Agent:
 
     def remember_message(self, role: str, content: str, message_id: str) -> str:
         """Сохраняет реплику в краткосрочную память (append-only)."""
+        if role not in self.ROLES:      # защита от опечатки/дрейфа роли
+            role = "user"
+        source = self.ROLES[role]
         ctx = MemoryContext(self.user_id, self.task, self.session_id)
         item = MemoryItem(
-            content=content, source="user" if role == "user" else "model",
-            scope="session", owner=self.user_id, source_message_id=message_id,
-            role=role,
+            content=content, source=source, scope="session", owner=self.user_id,
+            source_message_id=message_id, role=role,
         )
         return self.memory.layers["short_term"].write(ctx, item)
 

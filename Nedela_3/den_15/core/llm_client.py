@@ -14,6 +14,9 @@ import requests
 # OpenAI-совместимый эндпоинт RouterAI.
 URL = "https://routerai.ru/api/v1/chat/completions"
 MODEL = "stepfun/step-3.5-flash"
+MODEL_CONTEXT_LIMIT = 262144   # окно модели (Step-3.5-Flash_params.md)
+PRICE_IN_PER_M = 11.0          # ₽ / 1M входящих
+PRICE_OUT_PER_M = 33.0         # ₽ / 1M исходящих
 REQUEST_TIMEOUT = 30
 # Паузы между повторами при HTTP 429.
 RETRY_DELAYS = [2, 4, 8]

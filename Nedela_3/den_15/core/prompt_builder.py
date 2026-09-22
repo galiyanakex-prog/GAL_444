@@ -21,6 +21,12 @@ from typing import Optional
 BLOCK_ORDER = ("role", "profile", "invariants", "long_term", "working",
                "summary", "short_term", "current")
 
+# Имена блоков, управляемые дозированной доставкой (role и current — всегда,
+# неуправляемы). Канонический набор для --deliver / /deliver / Agent.deliver:
+# пересечение deliver идёт по нему, а не по LAYER_ORDER (порядок слоёв памяти).
+DELIVERABLE = ("profile", "invariants", "long_term", "working",
+               "summary", "short_term")
+
 # Правило роли: инварианты учитываются в рассуждениях, но обычное сообщение
 # пользователя НЕ считается разрешением их нарушить (канон `Задание_Д14.txt`).
 INVARIANTS_ROLE_RULE = (

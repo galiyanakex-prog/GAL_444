@@ -61,7 +61,11 @@ class WorkingMemory(MemoryLayer):
         return "\n".join(lines)
 
     def _task_state_lines(self, ctx: MemoryContext) -> list:
-        """Строки состояния задачи из task_state.json (нет снимка → пусто)."""
+        """Строки состояния задачи из task_state.json (нет снимка → пусто).
+
+        Миграция Дня 15: стадия implementation (бывший execution — снимки
+        Дней 13/14 мигрируются при загрузке в TaskState.from_dict).
+        """
         state = self.store.read_task_state(ctx.user_id, ctx.task)
         if not state:
             return []
@@ -70,9 +74,11 @@ class WorkingMemory(MemoryLayer):
         steps = state.get("steps", []) or []
         current = state.get("current_step", 0)
         # Этап + позиция шага (шаг N/M) + текст текущего шага.
-        if stage == "execution" and steps:
+        if stage == "implementation" and steps:
             idx = min(current, len(steps) - 1)
             lines.append(f"Этап: {stage} (шаг {current}/{len(steps)}): {steps[idx]}")
+        elif stage == "plan_approved":
+            lines.append(f"Этап: {stage} (план утверждён, шаг {current}/{len(steps)})")
         else:
             lines.append(f"Этап: {stage}")
         if stage == "paused":

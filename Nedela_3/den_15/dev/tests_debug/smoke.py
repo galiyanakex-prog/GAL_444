@@ -76,7 +76,8 @@ def test_cli_subprocess():
 
 
 def test_fsm_in_process():
-    """Жизненный цикл автомата in-process: plan → step → pause → resume → run → done."""
+    """Жизненный цикл автомата in-process (День 15): plan → approve → step →
+    pause → resume → run → done (утверждение плана — контрольный пункт)."""
     os.makedirs(TMP_ROOT, exist_ok=True)
     tmp = tempfile.mkdtemp(prefix="smoke_fsm_", dir=TMP_ROOT)
     repo = ProfileRepository(os.path.join(tmp, "profiles.db"))
@@ -91,9 +92,11 @@ def test_fsm_in_process():
     agent = build()
     agent.initialize_user("fsm_user", "Ф", {"style": "a", "constraints": "b", "context": "c"})
     agent.start_task("Найди три Python-фреймворка и сравни их")
-    agent.step_task()                       # planning → execution
-    assert agent.task_state.stage == TaskStage.EXECUTION
-    agent.step_task()                       # шаг 0 выполнен
+    agent.step_task()                       # new → planning (план, ожидает /approve)
+    assert agent.task_state.stage == TaskStage.PLANNING
+    agent.approve_plan()                    # planning → plan_approved
+    agent.step_task()                       # plan_approved → implementation, шаг 0
+    assert agent.task_state.stage == TaskStage.IMPLEMENTATION
     assert agent.pause() is True
     assert agent.task_state.stage == TaskStage.PAUSED
 
@@ -109,11 +112,13 @@ def test_fsm_in_process():
 
 
 def test_cli_fsm_subprocess():
-    """CLI-прогон команд жизненного цикла: /plan /step /pause /resume /run /state."""
+    """CLI-прогон команд жизненного цикла: /plan /approve /step /pause /resume
+    /run /state (новый поток Дня 15 — с утверждением плана)."""
     os.makedirs(TMP_ROOT, exist_ok=True)
     tmp = tempfile.mkdtemp(prefix="smoke_cli_fsm_", dir=TMP_ROOT)
     stdin = ("cli_user\nИван\nкраткий\nPython\nобучение\n"
-             "/plan Тестовая цель\n/step\n/pause\n/resume\n/run\n/state\n/exit\n")
+             "/plan Тестовая цель\n/approve\n/step\n/pause\n/resume\n/run\n"
+             "/state\n/exit\n")
     env = dict(os.environ)
     env["API_KEY"] = "test-key"
     proc = subprocess.run(
@@ -129,6 +134,7 @@ def test_cli_fsm_subprocess():
     for marker in ("[План]", "[Шаг]", "[Пауза]", "[Продолжение]", "[Прогон]",
                    "[Состояние задачи]"):
         assert marker in out, (marker, out)
+    assert "утверждён" in out, out
     assert "Этап: done" in out, out
     print("[smoke] CLI команды жизненного цикла OK (exit 0)")
 

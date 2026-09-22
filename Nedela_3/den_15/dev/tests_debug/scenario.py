@@ -10,8 +10,11 @@
   4. влияние памяти на ответы (сравнение с/без слоя);
   5. resume «с того же места»;
   6. персонализация: два профиля → разный состав промта + авто-роутинг;
-  7. пауза/продолжение задачи: снимок task_state.json по канону Дня 13,
-     «перезапуск» → resume с того же шага без повторного плана → run → done.
+  7. пауза/продолжение задачи: снимок task_state.json по канону Дня 15,
+     «перезапуск» → resume с того же шага без повторного плана → run → done;
+  8. конфликт запроса и инварианта (День 14): отказ + изменение правила;
+  9. контролируемые переходы (День 15): отказы /goto, флоу /approve,
+     пауза → перезапуск → resume (канон «Проверьте» из Задание_Д15.txt).
 """
 import json
 import os
@@ -183,9 +186,10 @@ def build_fsm(tmp, logs=None):
 
 
 def scenario_pause_resume(tmp):
-    """7. Пауза/продолжение задачи (канон Дня 13, arch §4.3).
+    """7. Пауза/продолжение задачи (канон Дня 15, arch §2.9).
 
-    /plan → шаг 0 выполнен → /pause → снимок task_state.json по канону задания →
+    /plan → план построен (planning, ожидает /approve) → /approve → /step
+    (шаг 0 выполнен) → /pause → снимок task_state.json по канону задания →
     «перезапуск» (новый Agent, тот же memory-dir) → /resume с того же шага без
     повторного плана → /run → done. Лог содержит «[Автомат]».
     """
@@ -193,12 +197,15 @@ def scenario_pause_resume(tmp):
     agent1 = build_fsm(tmp, logs)
     agent1.initialize_user("gina", "Г", {"style": "a", "constraints": "b", "context": "c"})
 
-    # /plan «Найди три Python-фреймворка и сравни их» → planning → execution (план из 3 шагов).
+    # /plan «Найди три Python-фреймворка и сравни их» → new → planning (план из 3 шагов).
     agent1.start_task("Найди три Python-фреймворка и сравни их")
-    agent1.step_task()                 # planning → execution (построен план)
-    assert agent1.task_state.stage == TaskStage.EXECUTION
+    agent1.step_task()                 # new → planning (план построен, ожидает /approve)
+    assert agent1.task_state.stage == TaskStage.PLANNING
     assert len(agent1.task_state.steps) == 3
-    agent1.step_task()                 # шаг 0 выполнен
+    agent1.approve_plan()              # planning → plan_approved
+    assert agent1.task_state.stage == TaskStage.PLAN_APPROVED
+    agent1.step_task()                 # plan_approved → implementation, шаг 0 выполнен
+    assert agent1.task_state.stage == TaskStage.IMPLEMENTATION
     assert agent1.task_state.current_step == 1 and len(agent1.task_state.results) == 1
 
     # /pause → снимок на диске.
@@ -208,11 +215,12 @@ def scenario_pause_resume(tmp):
     assert os.path.isfile(snap_path)
     with open(snap_path, encoding="utf-8") as file:
         raw = json.load(file)
-    # Канон снимка из `Задание_Д13.txt`: paused, previous_stage=execution, шаг 1, 1 результат.
+    # Канон снимка: paused, previous_stage=implementation, шаг 1, 1 результат, журнал.
     assert raw["stage"] == "paused"
-    assert raw["previous_stage"] == "execution"
+    assert raw["previous_stage"] == "implementation"
     assert raw["current_step"] == 1
     assert len(raw["results"]) == 1
+    assert isinstance(raw["transition_log"], list) and raw["transition_log"]
 
     # «Перезапуск»: новый Agent поверх того же memory-dir читает снимок.
     agent2 = build_fsm(tmp, logs)
@@ -223,7 +231,7 @@ def scenario_pause_resume(tmp):
 
     # /resume → продолжение с шага 1, план НЕ перестроен, задача НЕ переспрошена.
     assert agent2.resume() is True
-    assert agent2.task_state.stage == TaskStage.EXECUTION
+    assert agent2.task_state.stage == TaskStage.IMPLEMENTATION
     assert agent2.task_state.current_step == 1
     assert len(agent2.task_state.steps) == 3
 
@@ -236,6 +244,143 @@ def scenario_pause_resume(tmp):
     print("[scenario] пауза/продолжение задачи (task_state.json + перезапуск) OK")
 
 
+
+def scenario_invariant_conflict(tmp):
+    """8. Конфликт запроса и инварианта (День 14): отказ, объяснение, изменение правила.
+
+    /invariant add framework.django → запрос «перепиши API на FastAPI» → агент
+    ОТКАЗЫВАЕТ, называет framework.django и предлагает альтернативу; /check показывает
+    нарушение; /invariant set --yes меняет правило; повторный запрос проходит. Лог
+    содержит строки «[Инварианты]».
+    """
+    from core.invariants import Invariant
+    logs = []
+    repo = ProfileRepository(os.path.join(tmp, "profiles.db"))
+    store = Store(os.path.join(tmp, "users"), profile_repo=repo, log=logs.append)
+    memory = MemoryManager(default_layers(store, log=logs.append), log=logs.append)
+    agent = Agent(MockClient(), memory, PromptBuilder("Ты ассистент"), store,
+                  user_id="ivan", log=logs.append, executor=StubExecutor())
+    agent.initialize_user("ivan", "И", {"style": "a", "constraints": "b", "context": "c"})
+
+    # /invariant add framework.django architecture "Использовать Django"
+    agent.add_invariant(Invariant(id="framework.django", category="architecture",
+                                  description="Использовать Django, а не FastAPI"))
+
+    # Запрос конфликтует с инвариантом → отказ с объяснением и альтернативой.
+    before = agent.tool_calls
+    result = agent.propose_and_check("перепиши API на FastAPI")
+    assert result["allowed"] is False
+    assert agent.tool_calls == before                    # инструмент не вызван
+    assert "framework.django" in result["message"]
+    assert "альтернатив" in result["message"].lower()
+
+    # /check "перейти на FastAPI" → нарушение видно без исполнения.
+    action = agent.propose_action("перейти на FastAPI")
+    assert agent.check_invariants(action)
+
+    # Инвариант попадает в промт (явный учёт в рассуждениях).
+    joined = "\n".join(m["content"] for m in agent.prompts.build(agent.build_context("q"), agent.deliver))
+    assert "[invariants]" in joined and "framework.django" in joined
+
+    # /invariant set framework.django "..." --yes → правило изменено (требует подтверждения);
+    # без --yes — PermissionError (критерий 30).
+    try:
+        agent.update_invariant("framework.django", "Использовать FastAPI", authorized=False)
+        assert False, "ожидался PermissionError"
+    except PermissionError:
+        pass
+    agent.update_invariant("framework.django", "Использовать FastAPI", authorized=True)
+    assert agent.constraints.by_id("framework.django").description == "Использовать FastAPI"
+
+    # Чтобы запрос «перейти на FastAPI» прошёл, правило меняется явно: прежнее
+    # отключается, добавляется новое (архитектурное решение не меняется обычной фразой).
+    agent.toggle_invariant("framework.django", False)
+    agent.add_invariant(Invariant(id="framework.fastapi", category="architecture",
+                                  description="Использовать FastAPI"))
+    result2 = agent.propose_and_check("перейти на FastAPI")
+    assert result2["allowed"] is True
+
+    assert "[Инварианты]" in "\n".join(logs)
+    print("[scenario] конфликт запроса и инварианта (отказ + изменение) OK")
+
+
+def scenario_controlled_transitions(tmp):
+    """9. Контролируемые переходы (канон «Проверьте» из `Задание_Д15.txt`).
+
+    Ветка 1: /plan → план построен (planning) → /goto implementation → ОТКАЗ
+    («нельзя реализацию до утверждённого плана», состояние не изменилось,
+    запись в transition_log) → /approve → /goto done → ОТКАЗ («нельзя финал
+    без валидации») → /run → done → /goto new → ОТКАЗ (терминальная).
+    Ветка 2: /plan → /approve → /step → /pause → «перезапуск» (новый Agent,
+    тот же memory-dir) → /resume → /run → done (шаг не повторён). Лог содержит
+    «[Автомат] … ОТКАЗАНО».
+    """
+    logs = []
+    agent = build_fsm(tmp, logs)
+    agent.initialize_user("kate", "К", {"style": "a", "constraints": "b", "context": "c"})
+
+    # --- Ветка 1: отказы /goto + флоу /approve + терминальная done -------------
+    agent.start_task("Сделать REST API")
+    agent.step_task()                                  # new → planning (план)
+    assert agent.task_state.stage == TaskStage.PLANNING
+
+    # /goto implementation из planning: отказ, состояние не изменилось.
+    result = agent.attempt_transition("implementation")
+    assert "ОТКАЗАНО" in result
+    assert "нельзя делать реализацию до утверждённого плана" in result.lower()
+    assert agent.task_state.stage == TaskStage.PLANNING   # не изменилось
+    refused = [e for e in agent.task_state.transition_log if not e["allowed"]]
+    assert refused and refused[-1]["to"] == "implementation"
+
+    # /approve → plan_approved; /goto done → отказ («нельзя финал без валидации»).
+    agent.approve_plan()
+    assert agent.task_state.stage == TaskStage.PLAN_APPROVED
+    result2 = agent.attempt_transition("done")
+    assert "ОТКАЗАНО" in result2
+    assert "валидаци" in result2.lower()
+    assert agent.task_state.stage == TaskStage.PLAN_APPROVED
+
+    # /run → done (через implementation → validation); /goto new → отказ.
+    agent.run_to_end()
+    assert agent.task_state.stage == TaskStage.DONE
+    result3 = agent.attempt_transition("new")
+    assert "ОТКАЗАНО" in result3 and "терминальная" in result3.lower()
+    assert agent.task_state.stage == TaskStage.DONE
+
+    # /transitions: журнал с 3 отказами.
+    report = agent.transitions_report()
+    assert "отказов: 3" in report
+    print("[scenario] контролируемые переходы: отказы /goto + /approve OK")
+
+    # --- Ветка 2: пауза → перезапуск → resume → done (шаг не повторён) ---------
+    logs2 = []
+    agent1 = build_fsm(tmp, logs2)
+    agent1.initialize_user("lena", "Л", {"style": "a", "constraints": "b", "context": "c"})
+    agent1.start_task("Тестовая цель")
+    agent1.step_task()                                 # → planning
+    agent1.approve_plan()                              # → plan_approved
+    agent1.step_task()                                 # → implementation, шаг 0
+    assert agent1.task_state.current_step == 1
+    assert agent1.pause() is True
+
+    # «Перезапуск»: новый Agent поверх того же memory-dir.
+    agent2 = build_fsm(tmp, logs2)
+    agent2.load_state("lena")
+    assert agent2.task_state.stage == TaskStage.PAUSED
+    assert agent2.resume() is True
+    assert agent2.task_state.stage == TaskStage.IMPLEMENTATION
+    assert agent2.task_state.current_step == 1          # тот же шаг
+    agent2.run_to_end()
+    assert agent2.task_state.stage == TaskStage.DONE
+    assert len(agent2.task_state.results) == 3
+    assert len(agent2.task_state.results) == len(set(agent2.task_state.results))
+
+    joined = "\n".join(logs + logs2)
+    assert "ОТКАЗАНО" in joined
+    assert "[Автомат]" in joined
+    print("[scenario] контролируемые переходы: пауза → перезапуск → resume OK")
+
+
 def main():
     os.makedirs(TMP_ROOT, exist_ok=True)
     tmp = tempfile.mkdtemp(prefix="scn_", dir=TMP_ROOT)
@@ -246,6 +391,8 @@ def main():
     scenario_resume(tmp)
     scenario_personalization(tmp)
     scenario_pause_resume(tmp)
+    scenario_invariant_conflict(tmp)
+    scenario_controlled_transitions(tmp)
     print("SCENARIO OK: exit 0")
     return 0
 

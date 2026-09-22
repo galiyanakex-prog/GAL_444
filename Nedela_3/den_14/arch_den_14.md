@@ -94,7 +94,7 @@ Nedela_3/den_14/
 │   ├── agent.py                 # оркестратор: + check_invariants перед действием, отказ с объяснением
 │   ├── llm_client.py            # LLMClient (ABC) + RouterAIClient + MockClient (без изменений)
 │   ├── profile_router.py        # ProfileRouter (без изменений от дня 12)
-│   ├── prompt_builder.py        # BLOCK_ORDER + deliver + budget (+ блок invariants)
+│   ├── prompt_builder.py        # BLOCK_ORDER + DELIVERABLE + deliver + budget (+ блок invariants)
 │   ├── state_machine.py         # TaskStage + TaskState + переходы + pause/resume (без изменений)
 │   └── invariants.py            # ← НОВОЕ: Invariant + ConstraintSet + InvariantChecker + ProposedAction
 ├── memory/
@@ -310,7 +310,9 @@ users/<user_id>/
 ```
 
 `BLOCK_ORDER` дня 11–13 дополняется именем `invariants`; блок добавляется **только если
-имя есть в `deliver`** (дозированная доставка сохраняется). Это помогает модели видеть
+имя есть в `deliver`** (дозированная доставка сохраняется; пересечение `deliver` идёт по
+каноническому набору `DELIVERABLE` из `prompt_builder.py`, а не по `LAYER_ORDER` —
+дебаг Дня 14, баг A1). Это помогает модели видеть
 ограничения, но **окончательное решение принимает Python-проверка** (двойная защита:
 правило в промте + запрет в коде).
 
@@ -437,9 +439,10 @@ exit → save_state() + сейв invariants.json (набор переживае�
 | `/state`, `/plan`, `/step`, `/run`, `/pause`, `/resume`, `/task retry` | наследуются из дня 13 без изменений |
 | `/memory`, `/profile`-семейство, `/tasks`, `/task <имя>`, `/deliver`, `/compare`, `/summary`, `/tokens`, `/cost`, `/help`, `/exit` | наследуются из дней 11–13 без изменений |
 
-Флаги запуска — 11, наследуются: `--user`, `--profile`, `--deliver`, `--mock`, `--fresh`
+Флаги запуска — 12: наследуются `--user`, `--profile`, `--deliver`, `--mock`, `--fresh`
 (+ не восстанавливать и `invariants.json`), `--log`, `--token-log`, `--memory-dir`,
-`--max-tokens`, `--price-in/--price-out`.
+`--max-tokens`, `--price-in/--price-out`; добавлен в дебаге Дня 14 `--budget <N>`
+(лимит входящих токенов промта; по умолчанию `None` — обрезание выключено).
 
 ### 2.13 LLM-клиент, память, профили, автомат (без изменений)
 
@@ -481,9 +484,11 @@ Nedela_3/den_14/dev/
 │   ├── smoke/ , fixtures/        # каркас
 │   └── .tmp/                     # единственное место прогонов и временных файлов (.gitignore)
 └── logs_reports/                 # логирование и отчёты по этапам создания
-    ├── stages/                   # stage_00_env … stage_10_final, stage_E_person, stage_F_state
+    ├── stages/                   # stage_F_state.md (факт Дня 13); stage_00…stage_E_person — в archive/
     ├── errors/                   # карточки ошибок: контекст, стек, решение, статус
-    └── run_log.md                # сводный журнал прогонов (команда → результат → EXIT)
+    ├── archive/                  # исторические артефакты Дня 11/12 (run_log, final_report,
+    │                             #   stage_00…stage_E_person) + указатель archive/README.md
+    └── run_log.md                # (архивирован в archive/ — сводный журнал прогонов Дня 11/12)
 ```
 
 > Миграция на `arch_den_14.md` описана в `dev/migr_plan.md`; на его основе создаются подробные,
@@ -540,7 +545,8 @@ architecture "Использовать Django"` → запрос «перепи�
 - `errors/error_<timestamp>.md` — контекст этапа, тип ошибки, стек, решение, статус
   (✅ исправлено / ⚠️ обход / ❌ открыто).
 - `run_log.md` — сводный журнал прогонов: команда → результат → exit-код; карта
-  «этап → субагент → target → статус».
+  «этап → субагент → target → статус» (архивирован в `archive/` в дебаге Дня 14 —
+  описывал День 11/12; уникальные факты перенесены в `archive/README.md`).
 
 ---
 
@@ -560,7 +566,7 @@ architecture "Использовать Django"` → запрос «перепи�
 |---|---|
 | `dev/Проверка.md` | единственный сценарий ручной проверки (25 пунктов + строки 26–30 инвариантов) |
 | `dev/tests_debug/*` | L2/L3/L4 + гейт + `.tmp/` (единственное место временных файлов) |
-| `dev/logs_reports/*` | журнал миграции `migr_log.md`, ошибки, сводный лог |
+| `dev/logs_reports/*` | журнал миграции `migr_log.md`, ошибки, архив артефактов Дня 11/12 |
 
 > `Проверка.md` живёт **только в `dev/`** — артефакты процесса создания/приёмки, а не продукт;
 > в корне проекта их нет.

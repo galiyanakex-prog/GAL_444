@@ -12,6 +12,10 @@ class ShortTermMemory(MemoryLayer):
     layer_name = "short_term"
     scope = "session"
 
+    # ЕДИНСТВЕННЫЙ источник истины о размере окна краткосрочной памяти
+    # (дозированная доставка: последние N сообщений в промт).
+    window = 10
+
     def read(self, ctx: MemoryContext) -> dict:
         return self.store.read_session(ctx.user_id, ctx.task, ctx.session_id)
 
@@ -37,14 +41,13 @@ class ShortTermMemory(MemoryLayer):
         self.log(f"[Память] short_term ← {message_id} (parent={parent_id}) → {path}")
         return f"session.json +{message_id}"
 
+    def recent(self, ctx: MemoryContext, limit: int = None) -> list:
+        """Последние N сообщений как role/content (N = window, если limit=None)."""
+        messages = self.read(ctx).get("messages", [])
+        n = self.window if limit is None else limit
+        return [{"role": m.get("role", "user"), "content": m.get("content", "")}
+                for m in messages[-n:]]
+
     def as_prompt_block(self, ctx: MemoryContext) -> str:
-        session = self.read(ctx)
-        messages = session.get("messages", [])
-        # Окно краткосрочной памяти: берём последние N сообщений (история ≠ состояние).
-        window = messages[-SHORT_TERM_WINDOW:]
-        lines = [f"{m['role']}: {m['content']}" for m in window]
-        return "\n".join(lines)
-
-
-# Размер окна краткосрочной памяти при подстановке в промт (дозированная доставка).
-SHORT_TERM_WINDOW = 10
+        # Окно краткосрочной памяти: последние N сообщений (история ≠ состояние).
+        return "\n".join(f"{m['role']}: {m['content']}" for m in self.recent(ctx))

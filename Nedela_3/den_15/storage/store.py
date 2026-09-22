@@ -20,7 +20,6 @@ Store — единственный, кто знает пути. Остальны
 import json
 import os
 import re
-from datetime import datetime
 
 
 def safe_name(name: str) -> str:
@@ -178,12 +177,12 @@ class Store:
                 "constraints": [],
                 "facts": [],
                 "open_questions": [],
-                "current_state": "planning",
+                "current_state": "new",
             }
         for key in ("description", "refs", "lifecycle_summary", "decisions",
                     "constraints", "facts", "open_questions"):
             data.setdefault(key, [] if key not in ("description", "lifecycle_summary") else "")
-        data.setdefault("current_state", "planning")
+        data.setdefault("current_state", "new")
         return data
 
     def write_working(self, user_id: str, task_name: str, data: dict) -> str:
@@ -198,7 +197,9 @@ class Store:
     def read_task_state(self, user_id: str, task_name: str):
         """Снимок TaskState как dict; None — состояния ещё нет (или файл битый).
 
-        Не падает на отсутствующем/повреждённом файле: задача стартует с PLANNING.
+        Не падает на отсутствующем/повреждённом файле: задача стартует с NEW.
+        Миграция имён стадий ("execution" → implementation) — в
+        TaskState.from_dict (День 15): фасад отдаёт снимок как есть.
         """
         return self.read_json(self.task_state_path(user_id, task_name), None)
 

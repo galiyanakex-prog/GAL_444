@@ -1,10 +1,12 @@
-# migr_plan_1.md — рабочий план этапа M1 «Ядро инвариантов»
+# migr_plan_1.md — рабочий план этапа M1 «Ядро: состояния, карта, API контроля»
 
-> **Роль документа.** Рабочий план-алгоритм **одного этапа** миграции проекта `den_14` на
-> целевую архитектуру `Nedela_3/den_14/arch_den_14.md`. Разворачивает строку этапа **M1** из
-> `migr_plan.md` §4 в конкретные правки и проверки.
+> **Роль документа.** Рабочий план-алгоритм **одного этапа** миграции проекта `den_15`
+> на целевую архитектуру `Nedela_3/den_15/arch_den_15.md`. Разворачивает этап **M1** из
+> `migr_plan.md` §4 в конкретные правки и проверки. Закрывает ядро строгой машины
+> состояний (`arch_den_15.md` §2.2–2.6, §2.9).
 > **Конец этого этапа — автоматический гейт в этап M2** (`migr_plan_2.md`).
-> Источники: `migr_plan.md` (эталон), `arch_den_14.md` §2.2–2.4, §2.10, `Задание_Д14.txt`.
+> Источники: `migr_plan.md` (эталон), `arch_den_15.md` §2.2–2.9, `Задание_Д15.txt`
+> (API `can_transition`/`try_transition`/`InvalidTransitionError` — канон имён).
 
 ---
 
@@ -12,172 +14,199 @@
 
 | Поле | Значение |
 |---|---|
-| Этап | **M1** — Ядро инвариантов |
+| Этап | **M1** — Ядро: состояния, карта, API контроля |
 | Рабочий план | `dev/migr_plan_1.md` (этот файл) |
-| Зависит от | **M0** (baseline зелёный, точки внедрения зафиксированы) |
-| Открывает | `dev/migr_plan_2.md` (M2 — Хранение инвариантов) |
-| Основной артефакт | `core/invariants.py` (+ экспорт в `core/__init__.py` при необходимости) |
-| Живой ключ | **Не нужен** (чистые dataclass'ы + детерминированная проверка) |
+| Зависит от | **M0** (baseline, точки внедрения) |
+| Открывает | `dev/migr_plan_2.md` (M2 — Хранение: transition_log + миграция снимков) |
+| Закрывает | `arch_den_15.md` §2.2 (TaskStage 8, TaskState+transition_log), §2.3 (карта+API), §2.4 (запреты топологией), §2.5 (approve-флоу в run_task), §2.6 (REFUSAL_RULES), §2.9 (pause/resume на новых стадиях) |
+| Основные артефакты | `core/state_machine.py` (модернизация) |
+| Живой ключ | **Не нужен** (примитив-смоук инлайн, без LLM) |
+| Меняет поведение | **Да** (автомат: новый флоу с утверждением плана; `/plan` больше не ведёт сразу в реализацию) — заявлено `arch_den_15.md` §2.5 |
 
-**Цель этапа.** Реализовать `core/invariants.py` — модель и программную проверку инвариантов
-по контрактам `arch_den_14.md` §2.2–2.4 и §2.10.
+**Цель этапа.** Превратить `core/state_machine.py` дня 13/14 в строгую машину состояний
+канона `Задание_Д15.txt`: 8 допустимых состояний, whitelist-карта переходов,
+программный контроль (`can_transition`/`try_transition`/`InvalidTransitionError`),
+журнал переходов, утверждение плана как отдельная стадия, отказы с правилами.
 
 ---
 
 ## 1. Вход и предусловия
 
-- Существующий пакет `core/` (контракты дней 11–13 **не менять**).
-- Результат M0: точки внедрения зафиксированы.
-- `arch_den_14.md` §2.2 (модель), §2.3 (`InvariantChecker`), §2.4 (каталог), §2.10
-  (`update_invariant`).
+- `core/state_machine.py` текущий (день 13/14): `TaskStage` — 6 (без `NEW`/
+  `PLAN_APPROVED`, с `EXECUTION`); `ALLOWED_TRANSITIONS` с прямой дугой
+  `PLANNING → EXECUTION`; `transition() -> bool`; `next_state()` (задел, не
+  вызывается); `pause_task`/`resume_task`; `run_task` сразу ведёт в реализацию.
+- `core/agent.py`, `Kod.py` — callers автомата (адаптируются на M3/M4; на M1 —
+  только минимальная правка имён, чтобы проект компилировался: замена
+  `TaskStage.EXECUTION` → `TaskStage.IMPLEMENTATION` в callers, без изменения логики).
+- M0 зелёный (baseline: L2 76 / L4 8 / гейт 10+2⚠).
 
-**Предусловия:** активное `.venv`; `core/invariants.py` ещё не существует.
+**Предусловия:** контракты дней 11–14 вне автомата не трогать; `test_fsm.py` на этом
+этапе **допустимо временно красным** (адаптация — M5), но L1 (компиляция) обязана быть
+зелёной; падение прочих тестов недопустимо.
 
 ---
 
 ## 2. Шаги этапа (исполняемый алгоритм)
 
-### Шаг 1.1 — Создать `core/invariants.py` с моделью
-Реализовать dataclass'ы (имена — как в `Задание_Д14.txt`, канон):
+### Шаг 1.1 — `TaskStage`: 8 состояний (канон имён из задания)
+1. Переименовать `EXECUTION = "execution"` → `IMPLEMENTATION = "implementation"`.
+2. Добавить `NEW = "new"` (задача создана, не начата) и
+   `PLAN_APPROVED = "plan_approved"` (план утверждён).
+3. Порядок в enum: `NEW`, `PLANNING`, `PLAN_APPROVED`, `IMPLEMENTATION`,
+   `VALIDATION`, `DONE`, `PAUSED`, `FAILED`.
+4. **Ожидаемый результат:** 8 состояний; 4 базовых этапа куратора детализированы
+   (не удалены).
+
+### Шаг 1.2 — `ALLOWED_TRANSITIONS`: whitelist по `arch_den_15.md` §2.3
 ```python
-from dataclasses import dataclass, field
-
-@dataclass
-class Invariant:
-    id: str                       # "framework.django"
-    description: str              # "Использовать Django, а не FastAPI или Flask"
-    category: str                 # stack | architecture | technical | business
-    severity: str = "error"       # error | warning
-    active: bool = True
-
-@dataclass
-class ConstraintSet:
-    invariants: list[Invariant] = field(default_factory=list)
-
-    def active(self) -> list[Invariant]:
-        return [i for i in self.invariants if i.active]
-
-    def by_id(self, invariant_id: str) -> Invariant | None: ...
-
-@dataclass
-class ProposedAction:
-    description: str
-    technology: str | None = None
-    adds_dependency: bool = False
-    changes_database_schema: bool = False
-    # расширяемые поля под конкретные инварианты (target_file, package, ...)
+ALLOWED_TRANSITIONS = {
+    TaskStage.NEW:            {TaskStage.PLANNING, TaskStage.PAUSED, TaskStage.FAILED},
+    TaskStage.PLANNING:       {TaskStage.PLAN_APPROVED, TaskStage.PAUSED, TaskStage.FAILED},
+    TaskStage.PLAN_APPROVED:  {TaskStage.IMPLEMENTATION, TaskStage.PLANNING, TaskStage.PAUSED, TaskStage.FAILED},
+    TaskStage.IMPLEMENTATION: {TaskStage.VALIDATION, TaskStage.PLANNING, TaskStage.PAUSED, TaskStage.FAILED},
+    TaskStage.VALIDATION:     {TaskStage.DONE, TaskStage.IMPLEMENTATION, TaskStage.PLANNING, TaskStage.PAUSED, TaskStage.FAILED},
+    TaskStage.PAUSED:         set(),
+    TaskStage.DONE:           set(),
+    TaskStage.FAILED:         {TaskStage.PLANNING},
+}
 ```
-**Ожидаемый результат:** модель `Invariant` / `ConstraintSet` / `ProposedAction` создана.
-`ConstraintSet` — **отдельная сущность**, не часть `TaskState` и не часть истории диалога.
+Ключевые запреты (топологией, не `if`): `PLANNING → IMPLEMENTATION` (нет дуги —
+«нельзя реализацию до утверждённого плана»); `* → DONE` кроме `VALIDATION → DONE`
+(«нельзя финал без валидации»); `PAUSED → *` (только `resume_task()`).
+**Ожидаемый результат:** карта соответствует arch §2.3 построчно.
 
-### Шаг 1.2 — Реализовать `InvariantChecker` (интерфейс ABC + реализация)
-```python
-class InvariantChecker(ABC):
-    @abstractmethod
-    def check(self, action: ProposedAction, constraints: ConstraintSet) -> list[str]: ...
+### Шаг 1.3 — API контроля (имена из `Задание_Д15.txt`)
+1. `can_transition(from_state, to_state) -> bool` — `to_state in
+   ALLOWED_TRANSITIONS.get(from_state, set())`.
+2. `class InvalidTransitionError(Exception)`: поля `current`, `proposed`; сообщение
+   «Переход X → Y запрещён. Разрешено из X: …».
+3. `try_transition(state, proposed) -> TaskState`: отказ → `raise
+   InvalidTransitionError` (состояние **не меняется**, попытка пишется в
+   `transition_log` с `allowed=False`); успех → смена стадии + запись `allowed=True`.
+4. `transition(state, target, log=None) -> bool` — обёртка над `try_transition`
+   (ловит исключение, пишет ворнинг в лог, возвращает `False`) — обратная
+   совместимость callers дня 13/14.
+5. Удалить задел `next_state()` (замещён `can_transition`/`try_transition`; задел
+   «не вызывается» — теперь есть рабочий API).
+**Ожидаемый результат:** API канона задания; прежний `transition()` работает.
 
-class RuleBasedChecker(InvariantChecker):
-    def check(self, action, constraints) -> list[str]:
-        violations: list[str] = []
-        for inv in constraints.active():
-            if inv.id == "framework.django" and action.technology == "fastapi":
-                violations.append(f"Нарушен invariant {inv.id}: проект должен использовать Django.")
-            if inv.id == "dependencies.no-new" and action.adds_dependency:
-                violations.append(f"Нарушен invariant {inv.id}: нельзя добавлять новые зависимости.")
-            if inv.id == "database.no-schema-changes" and action.changes_database_schema:
-                violations.append(f"Нарушен invariant {inv.id}: нельзя изменять схему базы данных.")
-            # ... остальные правила по каталогу
-        return violations
+### Шаг 1.4 — `REFUSAL_RULES` (тексты правил отказов, `arch_den_15.md` §2.6)
+Словарь `(from, to) → текст правила + корректный шаг`. Обязательные пары:
+`(PLANNING, IMPLEMENTATION)`, `(NEW, IMPLEMENTATION)`, `(PLAN_APPROVED, DONE)`,
+`(IMPLEMENTATION, DONE)`, `(PLANNING, DONE)`, `(DONE, *)` (терминальная),
+`(PAUSED, *)` (только /resume). Функция `refusal_text(current, proposed) -> str`:
+специальное правило или общий шаблон («Разрешено из X: …; ближайший корректный шаг:
+<expected_action>»).
+**Ожидаемый результат:** детерминированные тексты без LLM.
+
+### Шаг 1.5 — `TaskState.transition_log` + `_log_transition`
+1. Поле `transition_log: list[dict] = field(default_factory=list)`.
+2. `_log_transition(state, frm, to, allowed, reason="")`: append
+   `{"from", "to", "allowed", "reason", "at"}` (формат — arch §2.7).
+3. `to_dict`/`from_dict`: сериализация `transition_log`; миграция: `"stage":
+   "execution"` → `IMPLEMENTATION`; отсутствие `transition_log` → `[]`; отсутствие
+   `stage`/неизвестное → `NEW` (дефолт входной стадии).
+**Ожидаемый результат:** журнал в модели; старые снимки читаются.
+
+### Шаг 1.6 — `approve_plan` + pause/resume на новых стадиях
+1. `approve_plan(state, log=None)`: `PLANNING → PLAN_APPROVED` через
+   `try_transition`; из других стадий — отказ с объяснением (не исключение:
+   возвращаем текст отказа, состояние не меняется). Идемпотентность: из
+   `PLAN_APPROVED` — «план уже утверждён».
+2. `pause_task`: разрешён из `NEW`/`PLANNING`/`PLAN_APPROVED`/`IMPLEMENTATION`/
+   `VALIDATION`; из `DONE`/`FAILED` — отказ с объяснением.
+3. `resume_task`: возврат в `previous_stage` (fallback `IMPLEMENTATION`), не трогая
+   `current_step`/`expected_action`/`steps`/`results`.
+**Ожидаемый результат:** контрольный пункт утверждения + пауза на всех рабочих стадиях.
+
+### Шаг 1.7 — `run_task`: новый поток (arch §2.5)
+1. `PLANNING`: `executor.plan(objective)` → `steps[]`, `current_step=0`,
+   `expected_action="утвердить план (/approve)"` — **остановка в `PLANNING`**
+   (перехода в реализацию нет).
+2. `PLAN_APPROVED`: переход в `IMPLEMENTATION` (первый шаг выполняется этим же
+   проходом или следующим — по факту текущей реализации `run_task`; главное —
+   переход только из `PLAN_APPROVED`).
+3. `IMPLEMENTATION`: шаг → `results.append` → `current_step += 1`; шаги кончились →
+   `VALIDATION`.
+4. `VALIDATION`: `validator(results)` → `DONE` (`expected_action=None`) либо
+   `FAILED` (`error`).
+5. `NEW`: проход → переход в `PLANNING` (сборка плана).
+**Ожидаемый результат:** `/run` из `planning` не может обойти утверждение.
+
+### Шаг 1.8 — Минимальная правка callers (только компиляция)
+1. `core/agent.py`, `Kod.py`: заменить `TaskStage.EXECUTION` →
+   `TaskStage.IMPLEMENTATION` (механически, без изменения логики; полная адаптация
+   флоу — M3/M4).
+2. `grep -rn "EXECUTION" core/ Kod.py` → пусто.
+**Ожидаемый результат:** L1 зелёный.
+
+### Шаг 1.9 — Примитив-смоук (инлайн, без LLM)
+```bash
+python - <<'EOF'
+# can_transition: разрешённые/запрещённые
+# try_transition: отказ не меняет состояние; InvalidTransitionError объясняет
+# полный поток: new → planning → approve → plan_approved → implementation →
+#   шаги → validation → done; run_task из planning останавливается
+# from_dict: "execution" → IMPLEMENTATION; без transition_log → []
+EOF
 ```
-Требования:
-- `InvariantChecker` — **интерфейс (ABC)**; конкретная реализация `RuleBasedChecker` инжектится
-  в `Agent` (полиморфизм, тестируемость);
-- проверка **не зависит от LLM** (детерминированные правила: поля `ProposedAction`/паттерны);
-- **несколько нарушений одновременно** (не только первое);
-- учитывать `active` (выключенные не проверяются) и `severity` (`error` — блокирует,
-  `warning` — ворнинг).
-**Ожидаемый результат:** `check()` возвращает список нарушений; пустой список = разрешено.
+**Ожидаемый результат:** все блоки смоука OK, EXIT 0.
 
-### Шаг 1.3 — Реализовать `update_invariant` (отдельная авторизованная операция)
-```python
-def update_invariant(constraints, invariant_id, new_description, authorized=False) -> None:
-    if not authorized:
-        raise PermissionError("Изменение инвариантов требует отдельного подтверждения.")
-    for inv in constraints.invariants:
-        if inv.id == invariant_id:
-            inv.description = new_description
-            return
-    raise KeyError(f"Инвариант не найден: {invariant_id}")
-```
-**Ожидаемый результат:** без `authorized=True` — `PermissionError`; отсутствующий id — `KeyError`.
-
-### Шаг 1.4 — Каталог инвариантов-примера (`arch_den_14.md` §2.4)
-Зафиксировать фабрику/хелпер примера набора (Python-проект, канон задания):
-| id | description | category | severity |
-|---|---|---|---|
-| `stack.python` | Использовать только Python 3.12 | stack | error |
-| `framework.django` | Использовать Django, а не FastAPI или Flask | architecture | error |
-| `dependencies.no-new` | Не добавлять новые внешние зависимости | technical | error |
-| `database.no-schema-changes` | Не изменять схему базы данных | business | error |
-
-**Ожидаемый результат:** пример набора воспроизводим одной функцией (используется в тестах M6).
-
-### Шаг 1.5 — Экспорт модуля (при необходимости)
-Если в `core/__init__.py` принят ре-экспорт публичных классов — добавить `Invariant`,
-`ConstraintSet`, `ProposedAction`, `InvariantChecker`, `RuleBasedChecker`, `update_invariant`.
-**Ожидаемый результат:** классы доступны для импорта из `core`.
+### Шаг 1.10 — Регрессия (допустимые отклонения зафиксировать)
+1. L1 `py_compile` → ok.
+2. L2 `unit_runner.py`: ожидание — прочие модули зелёные; `test_fsm.py` —
+   **допустимо ⚠ красным** (адаптация на M5; зафиксировать число падений в журнале).
+3. L4 `scenario.py`: `scenario_pause_resume` — допустимо ⚠ (новый флоу); прочие —
+   зелёные.
+4. Гейт: 10+2⚠ (README) — без новых красных, кроме зафиксированных.
+**Ожидаемый результат:** отклонения только перечисленные; каждое — с причиной.
 
 ---
 
 ## 3. Выход этапа
 
-- `core/invariants.py` (модель + проверка + `update_invariant` + каталог примера).
-- При необходимости — обновлённый `core/__init__.py`.
+- Модернизированный `core/state_machine.py` (TaskStage 8, карта, API контроля,
+  REFUSAL_RULES, transition_log, approve_plan, новый run_task).
+- Минимальные правки `core/agent.py`/`Kod.py` (только имена стадий).
 - Запись этапа **M1** в `dev/migr_log.md`.
 
 ---
 
 ## 4. Автоматический гейт M1→M2
 
-Примитив-смоук (инлайн или в `python -c`), без живого ключа:
-```bash
-python - <<'PY'
-from core.invariants import Invariant, ConstraintSet, ProposedAction, RuleBasedChecker, update_invariant
-cs = ConstraintSet(invariants=[Invariant(id="framework.django", description="Использовать Django", category="architecture")])
-chk = RuleBasedChecker()
-assert chk.check(ProposedAction(description="Добавить endpoint", technology="django"), cs) == []
-assert chk.check(ProposedAction(description="Перейти на FastAPI", technology="fastapi"), cs) != []
-try:
-    update_invariant(cs, "framework.django", "x", authorized=False); raise SystemExit("FAIL")
-except PermissionError:
-    pass
-print("M1 OK")
-PY
-```
-Гейт **зелёный**, если:
-- [ ] модуль `core/invariants.py` импортируется без ошибок;
-- [ ] разрешённое действие → `[]`; запрещённое (`technology="fastapi"` при `framework.django`)
-      → нарушение с `id` в тексте;
-- [ ] `update_invariant(authorized=False)` → `PermissionError`;
-- [ ] несколько нарушений возвращаются одновременно;
-- [ ] контракты дней 11–13 не затронуты.
+Гейт считается **зелёным**, если одновременно:
+- [ ] `TaskStage` — 8 состояний; карта соответствует arch §2.3 построчно;
+- [ ] `can_transition(PLANNING, IMPLEMENTATION)` → `False`;
+      `can_transition(VALIDATION, DONE)` → `True`; `can_transition(PAUSED, *)` → `False`;
+- [ ] `try_transition` из `planning` в `implementation` → `InvalidTransitionError`,
+      `state.stage` **не изменился**, в `transition_log` запись `allowed=False`;
+- [ ] полный поток `new → planning → (approve) → plan_approved → implementation →
+      validation → done` проходит; `run_task` из `planning` останавливается
+      (перехода в реализацию не было — по `transition_log`);
+- [ ] `from_dict("execution")` → `IMPLEMENTATION`; без `transition_log` → `[]`;
+- [ ] L1 зелёный; L2/L4 — отклонения только зафиксированные (`test_fsm` ⚠ до M5);
+- [ ] контракты дней 11–14 вне автомата не тронуты (grep-сверка импортов/сигнатур).
 
-**Зелёный** → запись M1 в `migr_log.md` (✅) → **перечитать `migr_plan.md`** → открыть
-`migr_plan_2.md`.
-**Красный** → карточка ошибки `dev/logs_reports/errors/error_<ts>.md`, этап M1 остаётся открыт.
+**Зелёный** → запись M1 в `migr_log.md` (✅) → **перечитать `migr_plan.md`** →
+создать `migr_plan_2.md`.
+**Красный** → карточка ошибки `dev/logs_reports/errors/error_<ts>.md`, этап M1 открыт.
 
 ---
 
-## 5. Запись в `migr_log.md`
+## 5. Запись в `migr_log.md` (форма §6.4 `migr_plan.md`)
 
 ```text
-## Этап M1 — Ядро инвариантов
+## Этап M1 — Ядро: состояния, карта, API контроля
 - Статус: ✅ завершён | ⚠️ обход | ❌ открыт
-- Было: слой инвариантов отсутствует
-- Стало: core/invariants.py (Invariant/ConstraintSet/ProposedAction/InvariantChecker/update_invariant + каталог)
-- Проверка: примитив-смоук (разрешённое → [], запрещённое → нарушение, authorized=False → PermissionError), exit-код
-- Артефакты: core/invariants.py [, core/__init__.py]
-- Спорное/риски: <если есть>
+- Было: TaskStage 6 (EXECUTION, без NEW/PLAN_APPROVED); переход PLANNING → EXECUTION
+  напрямую; transition() -> bool; next_state() — задел; run_task сразу в реализацию
+- Стало: <TaskStage 8; карта whitelist; can_transition/try_transition/
+  InvalidTransitionError; REFUSAL_RULES; transition_log; approve_plan; run_task
+  останавливается в planning>
+- Проверка: <примитив-смоук; L1; L2/L4 с зафиксированными отклонениями>
+- Артефакты: core/state_machine.py; минимальные правки agent.py/Kod.py
+- Спорное/риски: <test_fsm ⚠ до M5; прочее>
 - Перечитывание migr_plan.md перед следующим этапом: ✅ выполнено (дата/время)
 - Гейт M1→M2: ✅ пройден | ❌ не пройден
 ```
@@ -186,5 +215,6 @@ PY
 
 ## 6. Следующий шаг
 
-Перечитать `dev/migr_plan.md`, затем **M2** по `dev/migr_plan_2.md` (хранение инвариантов в
-`storage/store.py`, файл `invariants.json`).
+Перечитать актуальный `dev/migr_plan.md`, затем приступить к **M2** по
+`dev/migr_plan_2.md` (хранение: `transition_log` в `task_state.json`, миграция
+снимков, зеркало `current_state` в `working.py`).

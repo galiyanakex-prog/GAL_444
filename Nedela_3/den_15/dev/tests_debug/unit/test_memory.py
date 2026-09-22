@@ -74,3 +74,35 @@ def test_report_snapshot(tmp_path):
     report = memory.report(ctx)
     for name in LAYER_ORDER:
         assert f"[{name}]" in report
+
+
+def test_recent_window_and_limit(tmp_path):
+    # Окно — единственный владелец ShortTermMemory.window (A6): recent() без
+    # limit возвращает последние window сообщений, с limit — последние limit.
+    memory = make_memory(tmp_path)
+    ctx = MemoryContext("u5", "task1", "s1")
+    for i in range(12):
+        role = "user" if i % 2 == 0 else "assistant"
+        memory.layers["short_term"].write(ctx, MemoryItem(f"msg{i}", role=role,
+                                                          source="user"))
+    recent = memory.layers["short_term"].recent(ctx)
+    assert len(recent) == 10                      # окно по умолчанию
+    assert recent[0]["content"] == "msg2"         # первые два за окном
+    assert recent[-1]["content"] == "msg11"
+    assert all(set(m) == {"role", "content"} for m in recent)
+    limited = memory.layers["short_term"].recent(ctx, limit=3)
+    assert len(limited) == 3
+    assert limited[-1]["content"] == "msg11"
+
+
+def test_as_prompt_block_uses_window(tmp_path):
+    # as_prompt_block идёт через recent() — согласован с build_context агента.
+    memory = make_memory(tmp_path)
+    ctx = MemoryContext("u6", "task1", "s1")
+    for i in range(12):
+        memory.layers["short_term"].write(ctx, MemoryItem(f"msg{i}", role="user",
+                                                          source="user"))
+    block = memory.layers["short_term"].as_prompt_block(ctx)
+    assert "msg11" in block
+    assert "msg0" not in block                    # за окном
+    assert block.count(":") >= 10                 # 10 строк сообщений
