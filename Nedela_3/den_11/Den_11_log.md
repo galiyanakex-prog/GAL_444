@@ -104,3 +104,16 @@
 [15:54:41] [Память] short_term ← M7 (parent=M6) → /home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/Nedela_3/den_11/users/demo/tasks/Основная_задача/sessions/20260918_153722/session.json
 [15:54:53] [Память] short_term ← M8 (parent=M7) → /home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/Nedela_3/den_11/users/demo/tasks/Основная_задача/sessions/20260918_153722/session.json
 [15:54:53] [Агент] M4: ответ получен (доставка: ['long_term', 'profile', 'short_term', 'working'])
+[05:05:54] [Хранилище] profile = JSON в SQLite (таблица profiles, user_id=a)
+[05:05:54] [Память] profile ← ['id', 'name', 'style', 'constraints', 'context'] → /tmp/den11_acc_$/users/a/profile.json (JSON в SQLite)
+[05:05:54] [Память] remember(profile) → profile.json (['id', 'name', 'style', 'constraints', 'context'])
+[05:05:54] [Память] working ← ['description'] → /tmp/den11_acc_$/users/a/tasks/Основная_задача/working_memory.json
+[05:05:54] [Память] remember(working) → working_memory.json ['description']
+[05:05:54] [Память] long_term ← ['tasks'] → /tmp/den11_acc_$/users/a/long_term_memory.json
+[05:05:54] [Память] remember(long_term) → long_term_memory.json ['tasks']
+[05:05:54] [Агент] Пользователь a инициализирован (интервью пройдено)
+[05:05:54] [Память] short_term ← M1 (parent=None) → /tmp/den11_acc_$/users/a/tasks/Основная_задача/sessions/20260924_050554/session.json
+[05:05:54] [Память] short_term ← M2 (parent=M1) → /tmp/den11_acc_$/users/a/tasks/Основная_задача/sessions/20260924_050554/session.json
+[05:05:54] [Агент] M1: ответ получен (доставка: ['long_term', 'profile', 'short_term', 'working'])
+[05:05:54] [Память] working ← ['lifecycle_summary'] → /tmp/den11_acc_$/users/a/tasks/Основная_задача/working_memory.json
+[05:05:54] [Память] remember(working) → working_memory.json ['lifecycle_summary']
