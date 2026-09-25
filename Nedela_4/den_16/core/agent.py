@@ -43,13 +43,20 @@ class PromptContext:
     """Контекст, который PromptBuilder собирает в список сообщений."""
 
     def __init__(self, query: str, memory_blocks: dict, summary: str = "",
-                 short_term_messages: list = None, invariants=None):
+                 short_term_messages: list = None, invariants=None,
+                 tools=None, tools_block: str = "", max_tools: int = 20,
+                 max_schema_tokens: int = 600):
         self.query = query
         self.memory_blocks = memory_blocks
         self.summary = summary
         self.short_term_messages = short_term_messages or []
         # Инварианты (День 14): строка или ConstraintSet → блок [system: invariants].
         self.invariants = invariants
+        # Инструменты (День 16): список ToolDescriptor → блок [tools] (под лимитами).
+        self.tools = tools or []
+        self.tools_block = tools_block
+        self.max_tools = max_tools
+        self.max_schema_tokens = max_schema_tokens
 
 
 class LLMExecutor:
@@ -211,6 +218,10 @@ class Agent:
         # (без --mcp поведение = den_15). Инжектируются DI в Kod.build_agent.
         self.mcp_gateway = None
         self.tool_registry = None
+        self.tool_executor = None
+        self.tool_policy = None
+        # Лимит итераций агентного tool-use цикла (защита от зацикливания).
+        self.max_tool_iterations = 5
 
         # Текущая сессия (для краткосрочной памяти).
         self.session_id = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -617,9 +628,15 @@ class Agent:
         short_messages = self.memory.layers["short_term"].recent(ctx)
 
         summary = self.store.read_sessions_resume(self.user_id, self.task)
+        tools = []
+        if self.tool_registry is not None:
+            try:
+                tools = list(self.tool_registry.snapshot().tools)
+            except Exception:
+                tools = []
         return PromptContext(query, blocks, summary=summary,
                              short_term_messages=short_messages,
-                             invariants=self.constraints)
+                             invariants=self.constraints, tools=tools)
 
     def respond(self, user_message: str) -> str:
         """Полный цикл обработки одного сообщения пользователя."""
@@ -642,8 +659,13 @@ class Agent:
         messages = self.prompts.build(prompt_ctx, self.deliver,
                                       budget=self.prompt_budget)
 
-        # 3. Ответ LLM.
-        answer = self.llm.complete(messages)
+        # 3. Ответ LLM. Если включён MCP-слой с каталогом инструментов — полный
+        #    tool-use цикл (LLM запрашивает тул → исполняем → возвращаем результат).
+        if self.tool_executor is not None and self.tool_registry is not None \
+                and self.tool_registry.snapshot().tools:
+            answer = self._respond_with_tools(messages, prompt_ctx)
+        else:
+            answer = self.llm.complete(messages)
         if answer is None:
             return None
 
@@ -651,6 +673,69 @@ class Agent:
         self.remember_message("assistant", answer, message_id + "a")
         self.log(f"[Агент] {message_id}: ответ получен (доставка: {sorted(self.deliver)})")
         return answer
+
+    def _tool_specs(self, tools) -> list:
+        """ToolDescriptor[] → спецификация OpenAI tools (function-calling)."""
+        return [{
+            "type": "function",
+            "function": {
+                "name": tool.name,
+                "description": tool.description or "",
+                "parameters": tool.input_schema or {"type": "object"},
+            },
+        } for tool in tools]
+
+    def _respond_with_tools(self, messages: list, prompt_ctx) -> str:
+        """Агентный tool-use цикл: LLM → tool call → исполнение → LLM → ответ.
+
+        Ограничен `max_tool_iterations`; ошибки исполнителя возвращаются модели как
+        результат (не роняют цикл). Сырой ответ инструмента — только текущий контекст,
+        в память пишется лишь нормализованная запись (см. ToolExecutor/`external_actions`).
+        """
+        from core.tools import ToolCallRequest  # локальный импорт: без циклов модулей
+        from core.llm_client import TOOL_PROTOCOL_PROMPT
+
+        tools = list(prompt_ctx.tools)
+        specs = self._tool_specs(tools)
+        # Добавляем протокол инструментов в роль-инструкцию (fallback-путь).
+        if not any("[tools]" in m.get("content", "") for m in messages):
+            messages = [{"role": "system", "content": TOOL_PROTOCOL_PROMPT}] + messages
+        for _ in range(self.max_tool_iterations):
+            reply = self.llm.complete_with_tools(messages, tools=specs) \
+                if hasattr(self.llm, "complete_with_tools") \
+                else None
+            if reply is None or not reply.tool_calls:
+                return (reply.content if reply else None) or ""
+            for call in reply.tool_calls:
+                request = ToolCallRequest(name=call["name"],
+                                          arguments=call.get("arguments", {}),
+                                          call_id=call.get("id", ""))
+                result = self.tool_executor.execute(
+                    request, user_id=self.user_id, task=self.task,
+                    task_stage=(self.task_state.stage.value if self.task_state else ""),
+                    constraints=self.constraints)
+                self._record_external_action(result)
+                messages.append({"role": "assistant",
+                                 "content": f"tool_call: {call['name']}"})
+                messages.append({"role": "tool", "name": call["name"],
+                                 "tool_call_id": call.get("id", ""),
+                                 "content": result.summary or f"status={result.status}"})
+        return "Достигнут лимит вызовов инструментов за один запрос."
+
+    def _record_external_action(self, result) -> None:
+        """Нормализованная запись о вызове инструмента в рабочую память (без сырого)."""
+        if not self.user_id:
+            return
+        try:
+            ctx = MemoryContext(self.user_id, self.task, self.session_id)
+            self.memory.remember(
+                "working", ctx,
+                content={"external_actions": {
+                    "execution_id": result.execution_id, "tool": result.tool,
+                    "status": result.status, "summary": (result.summary or "")[:200]}},
+                source="system")
+        except Exception as exc:
+            self.log(f"[Агент] external_actions не записаны: {exc}")
 
     def remember_message(self, role: str, content: str, message_id: str) -> str:
         """Сохраняет реплику в краткосрочную память (append-only)."""

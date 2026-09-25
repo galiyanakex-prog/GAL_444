@@ -440,6 +440,88 @@ def build_mcp(tmp, logs=None, fail_initialize=False):
     return agent
 
 
+def _attach_tool_use(agent, tools, results):
+    """Включает полный tool-use на fake-транспорте (policy + executor + [tools])."""
+    import integrations.mcp.gateway as mcp_gateway_mod
+    from integrations.mcp.config import MCPServerConfig
+    from integrations.mcp.transport import FakeMCPTransport
+    from integrations.mcp.provider import MCPToolProvider
+    from core.tool_registry import ToolRegistry
+    from core.tool_policy import ToolPolicy
+    from core.tool_executor import ToolExecutor
+    from core.invariants import RuleBasedChecker
+
+    transport = FakeMCPTransport(tools, server_id="demo", tool_results=results)
+    servers = [MCPServerConfig(server_id="demo", transport="stdio",
+                               command="python", enabled=True, trust_level="low")]
+
+    class FakeSync(mcp_gateway_mod.MCPGatewaySync):
+        def __init__(self, srvs, transports=None):
+            self._gateway = mcp_gateway_mod.MCPGateway(srvs, {"demo": transport})
+
+        def _run(self, coro):
+            return mcp_gateway_mod.asyncio.run(coro)
+
+    gateway = FakeSync(servers)
+    registry = ToolRegistry()
+    registry.add_provider(MCPToolProvider(gateway))
+    agent.mcp_gateway = gateway
+    agent.tool_registry = registry
+    gateway.start()
+    registry.refresh()
+    agent.tool_executor = ToolExecutor(registry, ToolPolicy(), gateway,
+                                       store=agent.store, checker=RuleBasedChecker())
+    agent.deliver.add("tools")
+    return gateway
+
+
+def scenario_llm_tool_use(tmp):
+    """11. LLM tool-use (День 16, Ревизия 2): намерение → вызов тула → ответ.
+
+    MockClient детерминированно предлагает вызов search_locations по «Москва»;
+    ToolExecutor исполняет на fake-транспорте; результат возвращается в ответ;
+    запись — в tool_audit.jsonl; TaskStage не меняется (инструмент ≠ переход).
+    """
+    agent = build(tmp)
+    agent.initialize_user("u", "Иван", {"style": "a", "constraints": "b", "context": "c"})
+    tools = [{"name": "search_locations", "description": "city search",
+              "inputSchema": {"type": "object",
+                              "properties": {"query": {"type": "string"}},
+                              "required": ["query"]}}]
+    _attach_tool_use(agent, tools, {"search_locations": '{"results":[{"name":"Moscow"}]}'})
+    agent.start_task("Найти город")
+    agent.step_task()  # new → planning
+    stage_before = agent.task_state.stage
+    answer = agent.respond("найди город Москва")
+    assert "Moscow" in answer, answer
+    audit = agent.store.load_tool_audit("u", agent.task)
+    assert audit and audit[0]["tool"] == "mcp.demo.search_locations"
+    assert audit[0]["status"] == "succeeded"
+    # инструмент ≠ переход: стадия и журнал автомата не изменились
+    assert agent.task_state.stage == stage_before
+    print("[scenario] LLM tool-use: намерение → вызов → ответ (аудит) OK")
+
+
+def scenario_tool_denied(tmp):
+    """12. Policy/инвариант отклоняет вызов инструмента (День 16)."""
+    from core.invariants import Invariant, add_invariant
+    agent = build(tmp)
+    agent.initialize_user("u2", "Пётр", {"style": "a", "constraints": "b", "context": "c"})
+    tools = [{"name": "search_locations", "description": "city search",
+              "inputSchema": {"type": "object",
+                              "properties": {"query": {"type": "string"}},
+                              "required": ["query"]}}]
+    _attach_tool_use(agent, tools, {"search_locations": '{"results":[{"name":"Moscow"}]}'})
+    add_invariant(agent.constraints,
+                  Invariant(id="tool.deny.mcp.demo.search_locations",
+                            category="technical", description="инструмент запрещён"))
+    answer = agent.respond("найди город Москва")
+    assert "Нарушен инвариант" in answer, answer
+    audit = agent.store.load_tool_audit("u2", agent.task)
+    assert audit and audit[0]["status"] == "denied"
+    print("[scenario] tool denied: вызов отклонён инвариантом (аудит denied) OK")
+
+
 def scenario_mcp_discovery(tmp):
     """10. MCP discovery (День 16, канон arch_den_16.md §2.4/§3.2).
 
@@ -535,6 +617,8 @@ def main():
     scenario_invariant_conflict(tmp)
     scenario_controlled_transitions(tmp)
     scenario_mcp_discovery(tmp)
+    scenario_llm_tool_use(tmp)
+    scenario_tool_denied(tmp)
     print("SCENARIO OK: exit 0")
     return 0
 

@@ -13,6 +13,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from enum import Enum
 
 # 5 рабочих стадий дня 15 (строками — контракты не зависят от state_machine;
 # задел policy-фильтра инструментов по стадиям)
@@ -46,24 +47,40 @@ class ToolDescriptor:
 
 @dataclass(frozen=True)
 class ToolCallRequest:
-    """Запрос вызова инструмента (задел дня 17+: tools/call)."""
+    """Запрос вызова инструмента (tools/call)."""
 
     name: str
     arguments: dict = field(default_factory=dict)
+    call_id: str = ""               # id в протоколе tool-use (для связки с LLM)
 
 
 @dataclass(frozen=True)
 class ToolExecutionResult:
-    """Результат вызова инструмента (задел дня 17+).
+    """Результат вызова инструмента.
 
     `raw` — сырой ответ: только текущий execution context, никогда в память.
     """
 
     execution_id: str
     tool: str
-    status: str                     # ToolExecutionState (задел)
+    status: str                     # ToolExecutionState
     summary: str
     raw: object | None = None
+    is_error: bool = False
+    call_id: str = ""
+
+
+class ToolExecutionState(str, Enum):
+    """Инфраструктурные состояния вызова инструмента (НЕ TaskStage)."""
+
+    REQUESTED = "requested"
+    DENIED = "denied"
+    WAITING_CONFIRMATION = "waiting_confirmation"
+    RUNNING = "running"
+    SUCCEEDED = "succeeded"
+    FAILED = "failed"
+    TIMED_OUT = "timed_out"
+    CANCELLED = "cancelled"
 
 
 class ToolProvider(ABC):

@@ -22,10 +22,19 @@ from core.agent import Agent, StubExecutor, default_validator
 from core.state_machine import TaskStage
 from core.tools import ToolCatalogSnapshot, ToolDescriptor, ToolProvider
 from core.tool_registry import ToolRegistry
-from integrations.mcp.config import MCPServerConfig, DEFAULT_SERVERS, load_servers_config
+from integrations.mcp.config import (
+    MCPServerConfig, DEFAULT_SERVERS, WEATHER_MCP_URL, load_servers_config,
+)
 from integrations.mcp.gateway import MCPGateway
 from integrations.mcp.provider import MCPToolProvider
-from integrations.mcp.transport import FakeMCPTransport
+from integrations.mcp.transport import (
+    FakeMCPTransport, HttpMCPTransport, StdioMCPTransport, make_transport, _tool_schema,
+)
+from core.tool_policy import ToolPolicy
+from core.tool_executor import ToolExecutor
+from core.tools import ToolCallRequest, ToolExecutionState
+from core.invariants import ConstraintSet, Invariant, RuleBasedChecker, add_invariant
+from core.llm_client import parse_tool_calls, parse_fallback_tool_call
 
 # Каталог демо-сервера (канон задания Дня 16): три тула.
 DEMO_TOOLS = [
@@ -149,7 +158,7 @@ def test_provider_discover_normalization():
     assert bare.description == ""                    # дефолт описания
     assert bare.input_schema == {"type": "object"}   # дефолт схемы
     assert full.input_schema == {"type": "object", "properties": {"x": {"type": "string"}}}
-    asyncio.run(gateway.stop())
+    gateway.stop()
 
 
 # --- 3. Реестр ------------------------------------------------------------------
@@ -168,7 +177,7 @@ def test_registry_add_refresh_get():
         assert False, "ожидался KeyError"
     except KeyError as exc:
         assert "mcp.demo.get_time" in str(exc)   # перечень доступных в ошибке
-    asyncio.run(gateway.stop())
+    gateway.stop()
 
 
 def test_registry_unregister_leaves_catalog():
@@ -181,7 +190,7 @@ def test_registry_unregister_leaves_catalog():
     snap = registry.refresh()
     assert snap.version == 2
     assert snap.tools == ()
-    asyncio.run(gateway.stop())
+    gateway.stop()
 
 
 def test_registry_excludes_invalid_schema():
@@ -208,7 +217,7 @@ def test_cross_server_same_original_different_names():
     asyncio.run(gateway.start())
     tools = asyncio.run(gateway.discover())
     assert sorted(t.name for t in tools) == ["mcp.alpha.echo", "mcp.beta.echo"]
-    asyncio.run(gateway.stop())
+    gateway.stop()
 
 
 def test_qualified_collision_last_wins():
@@ -262,7 +271,7 @@ def test_overall_states_all_paths():
     # все READY → ready
     asyncio.run(gateway.start())
     assert gateway.status()["overall"] == "ready"
-    asyncio.run(gateway.stop())
+    gateway.stop()
     # смесь READY + FAILED → degraded
     mixed = MCPGateway([fake_server("a"), fake_server("b")],
                        {"a": FakeMCPTransport(DEMO_TOOLS, server_id="a"),
@@ -308,7 +317,7 @@ def test_denied_tools_filtered():
     names = [t.name for t in asyncio.run(gateway.discover())]
     assert "mcp.demo.echo" not in names
     assert "mcp.demo.get_time" in names
-    asyncio.run(gateway.stop())
+    gateway.stop()
 
 
 def test_allowed_tools_narrows():
@@ -319,7 +328,7 @@ def test_allowed_tools_narrows():
     asyncio.run(gateway.start())
     names = [t.name for t in asyncio.run(gateway.discover())]
     assert names == ["mcp.demo.get_time"]
-    asyncio.run(gateway.stop())
+    gateway.stop()
 
 
 # --- 8. Персистентность ----------------------------------------------------------------
@@ -357,7 +366,7 @@ def test_catalog_persistence_roundtrip(tmp_path):
                                provider=t["provider"], original_name=t["original_name"])
                 for t in loaded["tools"]]
     assert {t.original_name for t in restored} == {"get_time", "echo", "weather_stub"}
-    asyncio.run(gateway.stop())
+    gateway.stop()
 
 
 def test_catalog_missing_or_broken_is_empty(tmp_path):
@@ -388,7 +397,7 @@ def test_mcp_does_not_touch_task_state(tmp_path):
     asyncio.run(gateway.start())
     assert len(agent.tool_registry.refresh().tools) == 3
     asyncio.run(gateway.discover())
-    asyncio.run(gateway.stop())
+    gateway.stop()
 
     # инструмент ≠ переход: стадия и журнал автомата не изменились
     assert agent.task_state.stage == stage_before
@@ -438,11 +447,16 @@ def test_load_servers_config_valid_ignores_unknown(tmp_path):
 
 
 def test_default_servers_and_store_roundtrip(tmp_path):
-    # дефолт: демо-сервер через sys.executable («python» в PATH отсутствует)
-    cfg = DEFAULT_SERVERS[0]
-    assert cfg.server_id == "demo" and cfg.transport == "stdio"
-    assert cfg.command[0] == sys.executable
-    assert cfg.command[-1] == "integrations.mcp.demo_server"
+    # дефолт (Ревизия 2): основной — реальный погодный HTTP-сервер;
+    # демо-сервер (stdio) сохранён для детерминированных тестов, выключен по умолчанию.
+    by_id = {s.server_id: s for s in DEFAULT_SERVERS}
+    assert "weather" in by_id and by_id["weather"].transport == "http"
+    assert by_id["weather"].endpoint == WEATHER_MCP_URL
+    assert by_id["weather"].enabled is True
+    demo = by_id["demo"]
+    assert demo.transport == "stdio" and demo.enabled is False
+    assert demo.command[0] == sys.executable
+    assert demo.command[-1] == "integrations.mcp.demo_server"
     # конфиг серверов переживает перезапуск (Store → load_servers_config)
     store = Store(str(tmp_path / "users"))
     assert store.read_mcp_servers("u") is None
@@ -452,3 +466,151 @@ def test_default_servers_and_store_roundtrip(tmp_path):
     servers = load_servers_config(store.mcp_servers_path("u"))
     assert servers[0].server_id == "s1"
     assert servers[0].command == (sys.executable, "-m", "x")
+
+
+# --- 12. HTTP-транспорт и выбор по конфигу (Ревизия 2) ----------------------------------------
+
+def test_make_transport_selects_by_config():
+    http = MCPServerConfig(server_id="w", transport="http", endpoint="https://x/mcp/")
+    stdio = MCPServerConfig(server_id="d", transport="stdio", command=("python", "-m", "x"))
+    assert isinstance(make_transport(http), HttpMCPTransport)
+    assert isinstance(make_transport(stdio), StdioMCPTransport)
+
+
+def test_tool_schema_reads_snake_case():
+    class T:
+        name = "t"
+        description = "d"
+        input_schema = {"type": "object", "properties": {"q": {"type": "string"}},
+                        "required": ["q"]}
+    assert _tool_schema(T())["required"] == ["q"]
+    assert _tool_schema({"inputSchema": {"type": "object"}}) == {"type": "object"}
+
+
+# --- 13. tools/call (fake) --------------------------------------------------------------------
+
+def test_fake_call_tool_success_and_error():
+    fake = FakeMCPTransport(DEMO_TOOLS, server_id="demo",
+                            tool_results={"get_time": "12:00", "echo": "hi"})
+    asyncio.run(fake.initialize())
+    ok = asyncio.run(fake.call_tool("get_time", {}))
+    assert ok["isError"] is False and ok["text"] == "12:00"
+    err = FakeMCPTransport(DEMO_TOOLS, server_id="demo", error_call=True,
+                           tool_results={"echo": "x"})
+    asyncio.run(err.initialize())
+    assert asyncio.run(err.call_tool("echo", {"text": "x"}))["isError"] is True
+
+
+def test_gateway_call_tool_routes_and_reports():
+    gateway = make_gateway(tools=DEMO_TOOLS)
+    asyncio.run(gateway.start())
+    gateway._transports["demo"].set_tool_result("get_time", "12:00")
+    res = asyncio.run(gateway.call_tool("demo", "get_time", {}))
+    assert res.status == ToolExecutionState.SUCCEEDED.value
+    assert res.tool == "mcp.demo.get_time"
+    bad = asyncio.run(gateway.call_tool("nope", "get_time", {}))
+    assert bad.status == ToolExecutionState.FAILED.value and bad.is_error
+
+
+# --- 14. ToolPolicy / ToolExecutor / аудит ----------------------------------------------------
+
+def _executor(tmp_path, tools=DEMO_TOOLS, results=None):
+    from integrations.mcp.gateway import MCPGatewaySync
+    servers = [fake_server()]
+    fake = FakeMCPTransport(tools, server_id="demo")
+    if results:
+        for name, value in results.items():
+            fake.set_tool_result(name, value)
+    gateway = MCPGatewaySync(servers, {"demo": fake})
+    gateway.start()
+    registry = ToolRegistry()
+    registry.add_provider(MCPToolProvider(gateway))
+    registry.refresh()
+    store = Store(str(tmp_path / "users"))
+    executor = ToolExecutor(registry, ToolPolicy(), gateway, store=store,
+                            checker=RuleBasedChecker())
+    return gateway, registry, store, executor
+
+
+def test_policy_denies_by_schema_and_stage():
+    policy = ToolPolicy()
+    desc = ToolDescriptor(name="mcp.demo.echo", description="d",
+                          input_schema={"type": "object",
+                                        "properties": {"text": {"type": "string"}},
+                                        "required": ["text"]},
+                          source="mcp", provider="demo", original_name="echo")
+    assert policy.check(desc, ToolCallRequest("mcp.demo.echo", {})).allowed is False
+    assert policy.check(desc, ToolCallRequest("mcp.demo.echo", {"text": "x"}),
+                        task_stage="done").allowed is False
+    assert policy.check(desc, ToolCallRequest("mcp.demo.echo", {"text": "x"}),
+                        task_stage="implementation").allowed is True
+
+
+def test_executor_invokes_and_audits(tmp_path):
+    gateway, registry, store, executor = _executor(tmp_path, results={"get_time": "12:00"})
+    res = executor.execute(ToolCallRequest("mcp.demo.get_time"), user_id="u", task="T",
+                           task_stage="implementation")
+    assert res.status == ToolExecutionState.SUCCEEDED.value
+    audit = store.load_tool_audit("u", "T")
+    assert len(audit) == 1 and audit[0]["status"] == "succeeded"
+    assert audit[0]["arguments_hash"] and "arguments" not in audit[0]
+    gateway.stop()
+
+
+def test_executor_denied_by_invariant(tmp_path):
+    gateway, registry, store, executor = _executor(tmp_path, results={"get_time": "12:00"})
+    cs = ConstraintSet()
+    add_invariant(cs, Invariant(id="tool.deny.mcp.demo.get_time", category="technical",
+                                description="запрещено"))
+    res = executor.execute(ToolCallRequest("mcp.demo.get_time"), user_id="u", task="T",
+                           task_stage="implementation", constraints=cs)
+    assert res.status == ToolExecutionState.DENIED.value
+    assert store.load_tool_audit("u", "T")[0]["status"] == "denied"
+    gateway.stop()
+
+
+# --- 15. LLM tool-use (парсеры + цикл агента) -------------------------------------------------
+
+def test_tool_call_parsers():
+    native = {"tool_calls": [{"id": "1", "function": {
+        "name": "mcp.weather.search_locations", "arguments": '{"query": "Москва"}'}}]}
+    calls = parse_tool_calls(native)
+    assert calls[0]["name"] == "mcp.weather.search_locations"
+    assert calls[0]["arguments"] == {"query": "Москва"}
+    fb = parse_fallback_tool_call('```json\n{"tool": "x", "arguments": {"a": 1}}\n```')
+    assert fb["name"] == "x" and fb["arguments"] == {"a": 1}
+    assert parse_fallback_tool_call("обычный текст") is None
+    assert parse_fallback_tool_call("{не json}") is None
+
+
+def test_agent_tool_use_cycle(tmp_path):
+    gateway, registry, store, executor = _executor(
+        tmp_path,
+        tools=[{"name": "search_locations", "description": "city search",
+                "inputSchema": {"type": "object",
+                                "properties": {"query": {"type": "string"}},
+                                "required": ["query"]}}],
+        results={"search_locations": '{"results":[{"name":"Moscow"}]}'})
+    agent = make_agent(tmp_path, mcp=True)
+    agent.initialize_user("mcp15", "М", {"style": "a", "constraints": "b", "context": "c"})
+    agent.tool_registry = registry
+    agent.tool_executor = executor
+    agent.deliver.add("tools")
+    answer = agent.respond("найди город Москва")
+    assert "Moscow" in answer
+    assert store.load_tool_audit("mcp15", agent.task)[0]["tool"] == "mcp.demo.search_locations"
+    gateway.stop()
+
+
+def test_tools_block_in_prompt(tmp_path):
+    from core.agent import PromptContext
+    from core.prompt_builder import PromptBuilder, BLOCK_ORDER
+    tool = ToolDescriptor(name="mcp.weather.search_locations", description="city",
+                          input_schema={"type": "object"}, source="mcp",
+                          provider="weather", original_name="search_locations")
+    pb = PromptBuilder("ROLE")
+    ctx = PromptContext("найди Москва", {}, tools=[tool])
+    msgs = pb.build(ctx, {"tools"})
+    assert any("[tools]" in m["content"] for m in msgs)
+    assert not any("[tools]" in m["content"] for m in pb.build(ctx, {"profile"}))
+    assert BLOCK_ORDER.index("tools") == BLOCK_ORDER.index("invariants") + 1

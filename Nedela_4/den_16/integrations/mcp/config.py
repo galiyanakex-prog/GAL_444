@@ -8,8 +8,12 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 from dataclasses import dataclass, field
+
+# Реальный MCP-сервер (погода) недели 4; переопределяется env-переменной.
+WEATHER_MCP_URL = os.getenv("MCP_WEATHER_URL", "https://weatherapi.projecteol.ru/mcp/")
 
 
 @dataclass(frozen=True)
@@ -28,15 +32,23 @@ class MCPServerConfig:
     max_result_bytes: int = 65536
 
 
-# Единственный сервер Дня 16 — локальный демо-сервер (stdio)
+# Реальные серверы Дня 16 (Ревизия 2): основной — погодный HTTP-сервер недели;
+# локальный демо-сервер (stdio) сохранён для детерминированных тестов.
 DEFAULT_SERVERS: tuple[MCPServerConfig, ...] = (
+    MCPServerConfig(
+        server_id="weather",
+        transport="http",
+        endpoint=WEATHER_MCP_URL,
+        enabled=True,
+        trust_level="low",
+    ),
     MCPServerConfig(
         server_id="demo",
         transport="stdio",
         # sys.executable: интерпретатор текущего процесса (venv недели) —
         # «python» в PATH этой системы отсутствует, демо-сервер не поднимался.
         command=(sys.executable, "-m", "integrations.mcp.demo_server"),
-        enabled=True,
+        enabled=False,   # по умолчанию активен реальный сервер; demo — для тестов
         trust_level="low",
     ),
 )

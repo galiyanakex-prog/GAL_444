@@ -21,12 +21,8 @@ class MCPClient:
         self.config = config
         self.server_id = config.server_id
         if transport is None:
-            from integrations.mcp.transport import StdioMCPTransport
-            transport = StdioMCPTransport(
-                config.server_id, config.command or ("python", "-m",
-                                                     "integrations.mcp.demo_server"),
-                config.timeout_seconds,
-            )
+            from integrations.mcp.transport import make_transport
+            transport = make_transport(config)
         self._transport = transport
         self.init_info: dict = {}
 
@@ -58,6 +54,16 @@ class MCPClient:
                 "inputSchema": item.get("inputSchema") or {"type": "object"},
             })
         return normalized
+
+    async def call_tool(self, name: str, arguments: dict) -> dict:
+        """Вызов инструмента → нормализованный {isError, text, raw}."""
+        try:
+            result = await self._transport.call_tool(name, arguments or {})
+        except MCPConnectionError:
+            raise
+        except Exception as exc:
+            raise MCPConnectionError(self.server_id, f"call_tool «{name}»: {exc}") from exc
+        return result
 
     async def close(self) -> None:
         await self._transport.close()

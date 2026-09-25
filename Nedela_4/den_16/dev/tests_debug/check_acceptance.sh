@@ -309,7 +309,101 @@ WEOF
   grep -q '\"required\": \[\"location\"\]' \"\$D/out.txt\"
 "
 
+# 29 (Ревизия 2): HTTP-транспорт выбирается по конфигу; фикс чтения схемы (input_schema).
+check "HTTP-транспорт и фикс input_schema" bash -c "
+  '$PY' - <<'PYEOF'
+import sys
+sys.path.insert(0, '$KOD')
+from integrations.mcp.config import MCPServerConfig
+from integrations.mcp.transport import make_transport, HttpMCPTransport, StdioMCPTransport, _tool_schema
+h = MCPServerConfig(server_id='w', transport='http', endpoint='https://x/mcp/')
+s = MCPServerConfig(server_id='d', transport='stdio', command=('python', '-m', 'x'))
+assert isinstance(make_transport(h), HttpMCPTransport)
+assert isinstance(make_transport(s), StdioMCPTransport)
+class T: name='t'; description='d'; input_schema={'type':'object','required':['q']}
+assert _tool_schema(T())['required'] == ['q']
+print('ok')
+PYEOF
+"
+
+# 30 (Ревизия 2): tools/call на fake-транспорте → результат; ToolPolicy/ToolExecutor + аудит.
+check "tools/call + policy + аудит (fake)" bash -c "
+  '$PY' - <<'PYEOF'
+import sys, tempfile, os, asyncio
+sys.path.insert(0, '$KOD')
+from integrations.mcp.config import MCPServerConfig
+from integrations.mcp.transport import FakeMCPTransport
+from integrations.mcp.gateway import MCPGateway
+from integrations.mcp.provider import MCPToolProvider
+from core.tool_registry import ToolRegistry
+from core.tool_policy import ToolPolicy
+from core.tool_executor import ToolExecutor
+from core.tools import ToolCallRequest, ToolExecutionState
+from storage.store import Store
+TOOLS=[{'name':'echo','description':'e','inputSchema':{'type':'object','properties':{'text':{'type':'string'}},'required':['text']}}]
+gw=MCPGateway([MCPServerConfig(server_id='demo',transport='stdio',command=('python',),enabled=True)],
+              {'demo':FakeMCPTransport(TOOLS,server_id='demo',tool_results={'echo':'hi'})})
+asyncio.run(gw.start())
+reg=ToolRegistry(); reg.add_provider(MCPToolProvider(gw)); reg.refresh()
+tmp=tempfile.mkdtemp(prefix='acc_tooluse_',dir='$TMP')
+store=Store(os.path.join(tmp,'users'))
+ex=ToolExecutor(reg,ToolPolicy(),gw,store=store)
+r=ex.execute(ToolCallRequest('mcp.demo.echo',{'text':'hi'}),user_id='u',task='T',task_stage='implementation')
+assert r.status==ToolExecutionState.SUCCEEDED.value and r.summary=='hi', r
+assert store.load_tool_audit('u','T')[0]['tool']=='mcp.demo.echo'
+d=ex.execute(ToolCallRequest('mcp.demo.echo',{}),user_id='u',task='T',task_stage='implementation')
+assert d.status==ToolExecutionState.DENIED.value
+print('ok')
+PYEOF
+"
+
+# 31 (Ревизия 2): блок [tools] в промте + LLM tool-use цикл (MockClient) → вызов тула.
+check "LLM tool-use: блок [tools] + цикл (mock)" bash -c "
+  '$PY' - <<'PYEOF'
+import sys, tempfile, os, asyncio
+sys.path.insert(0, '$KOD')
+from core.prompt_builder import PromptBuilder, BLOCK_ORDER
+from core.tools import ToolDescriptor
+from core.agent import PromptContext
+from integrations.mcp.config import MCPServerConfig
+from integrations.mcp.transport import FakeMCPTransport
+from integrations.mcp.gateway import MCPGateway
+from integrations.mcp.provider import MCPToolProvider
+from core.tool_registry import ToolRegistry
+from core.tool_policy import ToolPolicy
+from core.tool_executor import ToolExecutor
+from core.invariants import RuleBasedChecker
+from storage.store import Store
+from storage.db import ProfileRepository
+from memory.manager import MemoryManager, default_layers
+from core.llm_client import MockClient
+from core.agent import Agent, StubExecutor
+tool=ToolDescriptor(name='mcp.weather.search_locations',description='city',input_schema={'type':'object'},
+                    source='mcp',provider='weather',original_name='search_locations')
+pb=PromptBuilder('ROLE'); ctx=PromptContext('найди Москва',{},tools=[tool])
+assert any('[tools]' in m['content'] for m in pb.build(ctx,{'tools'}))
+assert BLOCK_ORDER.index('tools')==BLOCK_ORDER.index('invariants')+1
+tmp=tempfile.mkdtemp(prefix='acc_tooluse2_',dir='$TMP')
+store=Store(os.path.join(tmp,'users'),profile_repo=ProfileRepository(os.path.join(tmp,'p.db')))
+TOOLS=[{'name':'search_locations','description':'c','inputSchema':{'type':'object','properties':{'query':{'type':'string'}},'required':['query']}}]
+gw=MCPGateway([MCPServerConfig(server_id='weather',transport='http',endpoint='x',enabled=True)],
+              {'weather':FakeMCPTransport(TOOLS,server_id='weather',tool_results={'search_locations':'{\"results\":[{\"name\":\"Moscow\"}]}'})})
+asyncio.run(gw.start())
+reg=ToolRegistry(); reg.add_provider(MCPToolProvider(gw)); reg.refresh()
+a=Agent(MockClient(),MemoryManager(default_layers(store)),PromptBuilder('ROLE'),store,user_id='u',executor=StubExecutor())
+a.initialize_user('u','И',{'style':'a','constraints':'b','context':'c'})
+a.mcp_gateway=gw; a.tool_registry=reg
+a.tool_executor=ToolExecutor(reg,ToolPolicy(),gw,store=store,checker=RuleBasedChecker())
+a.deliver.add('tools')
+ans=a.respond('найди город Москва')
+assert 'Moscow' in ans, ans
+assert store.load_tool_audit('u',a.task)[0]['tool']=='mcp.weather.search_locations'
+print('ok')
+PYEOF
+"
+
 # ИтОГ
+
 echo ""
 echo "ИТОГ: $PASS из $TOTAL зелёные (FAIL=$FAIL)"
 

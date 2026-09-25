@@ -17,14 +17,42 @@
 """
 from typing import Optional
 
-# Канонический порядок блоков промта (invariants — после profile, до working).
-BLOCK_ORDER = ("role", "profile", "invariants", "long_term", "working",
+
+def render_tools(tools, max_tools: int = 20, max_schema_tokens: int = 600,
+                 include_descriptions: bool = True, estimator=None) -> str:
+    """Текст блока [tools]: имя + описание + схема под лимитами (День 16).
+
+    tools — список ToolDescriptor; лимиты обрезают каталог (сначала по числу,
+    затем по суммарному бюджету токенов схем).
+    """
+    if not tools or max_tools <= 0:
+        return ""
+    estimator = estimator or (lambda text: max(1, len(text) // 4))
+    lines = ["Доступные инструменты (вызывай через инструментальный протокол):"]
+    used = 0
+    for tool in list(tools)[:max_tools]:
+        lines.append(f"- {tool.name}")
+        if include_descriptions and getattr(tool, "description", ""):
+            lines.append(f"    описание: {tool.description}")
+        schema_text = f"    аргументы: {tool.input_schema}"
+        tokens = estimator(schema_text)
+        if used + tokens > max_schema_tokens:
+            break
+        lines.append(schema_text)
+        used += tokens
+    return "\n".join(lines)
+
+
+# Канонический порядок блоков промта (invariants — после profile, до working;
+# tools (День 16) — после invariants, до long_term: ассистент видит доступные
+# инструменты, не смещая прежние блоки).
+BLOCK_ORDER = ("role", "profile", "invariants", "tools", "long_term", "working",
                "summary", "short_term", "current")
 
 # Имена блоков, управляемые дозированной доставкой (role и current — всегда,
 # неуправляемы). Канонический набор для --deliver / /deliver / Agent.deliver:
 # пересечение deliver идёт по нему, а не по LAYER_ORDER (порядок слоёв памяти).
-DELIVERABLE = ("profile", "invariants", "long_term", "working",
+DELIVERABLE = ("profile", "invariants", "tools", "long_term", "working",
                "summary", "short_term")
 
 # Правило роли: инварианты учитываются в рассуждениях, но обычное сообщение
@@ -97,6 +125,18 @@ class PromptBuilder:
         # 3. Инварианты — явный учёт неизменяемых правил в рассуждениях.
         if inv_text:
             blocks.append(("invariants", False, {"role": "system", "content": f"[invariants]\n{inv_text}"}))
+
+        # 3.5. Инструменты (День 16) — описываются после инвариантов, до памяти.
+        tools_block = getattr(ctx, "tools_block", "")
+        if not tools_block and "tools" in deliver and getattr(ctx, "tools", None):
+            tools_block = render_tools(
+                ctx.tools,
+                max_tools=getattr(ctx, "max_tools", 20),
+                max_schema_tokens=getattr(ctx, "max_schema_tokens", 600),
+                estimator=self.token_estimator,
+            )
+        if "tools" in deliver and tools_block:
+            blocks.append(("tools", False, {"role": "system", "content": f"[tools]\n{tools_block}"}))
 
         # 4..5. Слои памяти (long_term/working) — только если в deliver.
         for name in ("long_term", "working"):

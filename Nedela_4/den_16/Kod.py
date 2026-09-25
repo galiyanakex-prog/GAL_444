@@ -192,14 +192,43 @@ def build_agent(user_id=None, mock=False, mcp_enabled=False):
         from integrations.mcp.gateway import MCPGatewaySync
         from integrations.mcp.provider import MCPToolProvider
         from core.tool_registry import ToolRegistry
+        from core.tool_policy import ToolPolicy
+        from core.tool_executor import ToolExecutor
 
         servers_path = store.mcp_servers_path(user_id) if user_id else None
         servers = load_servers_config(servers_path)
         gateway = MCPGatewaySync(servers)
         registry = ToolRegistry()
         registry.add_provider(MCPToolProvider(gateway))
+        # Полный tool-use: policy + исполнитель + блок [tools] в промте.
+        policy = ToolPolicy()
+        executor = ToolExecutor(registry, policy, gateway, store=store,
+                                checker=agent.checker, log=log_line)
         agent.mcp_gateway = gateway
         agent.tool_registry = registry
+        agent.tool_policy = policy
+        agent.tool_executor = executor
+        agent.deliver.add("tools")
+        # Каталог готовим сразу (реальное discovery); недоступность — деградация.
+        try:
+            gateway.start()
+            snap = registry.refresh()
+            # Персистентность каталога (переживает перезапуск) — как в /mcp refresh.
+            if user_id:
+                store.save_tool_catalog(user_id, {
+                    "schema_version": 1, "version": snap.version,
+                    "tools": [{
+                        "name": t.name, "description": t.description,
+                        "input_schema": t.input_schema, "source": t.source,
+                        "provider": t.provider, "original_name": t.original_name,
+                        "risk_level": t.risk_level,
+                        "allowed_stages": sorted(t.allowed_stages),
+                        "requires_confirmation": t.requires_confirmation,
+                        "enabled": t.enabled,
+                    } for t in snap.tools],
+                    "created_at": snap.created_at})
+        except Exception as error:
+            log_line(f"[MCP] стартовое discovery не удалось: {error}")
     return agent
 
 
@@ -349,8 +378,36 @@ def handle_mcp_command(agent: Agent, user_input: str):
         print("[MCP] Соединения закрыты (DISCONNECTED).\n")
         return
 
+    if sub == "call":
+        # /mcp call <qualified_tool> [{json}]
+        if len(parts) < 3:
+            print("[MCP] Использование: /mcp call <tool> [{\"arg\": \"value\"}]\n")
+            return
+        if agent.tool_executor is None:
+            print("[MCP] Исполнитель инструментов не собран.\n")
+            return
+        tool_name = parts[2]
+        raw_args = user_input.split(None, 3)[3] if len(parts) > 3 else "{}"
+        try:
+            arguments = json.loads(raw_args) if raw_args.strip() else {}
+        except json.JSONDecodeError as error:
+            print(f"[MCP] Аргументы должны быть JSON: {error}\n")
+            return
+        from core.tools import ToolCallRequest
+        result = agent.tool_executor.execute(
+            ToolCallRequest(name=tool_name, arguments=arguments),
+            user_id=agent.user_id, task=agent.task,
+            task_stage=(agent.task_state.stage.value if agent.task_state else ""),
+            constraints=agent.constraints)
+        print(f"[MCP] Вызов {tool_name}: {result.status}")
+        if result.summary:
+            print(f"  результат: {result.summary[:500]}")
+        print()
+        return
+
     print(f"[MCP] Неизвестная подкоманда: {sub or '(пусто)'}. "
-          "Доступно: status | servers | tools | refresh | connect <id> | disconnect\n")
+          "Доступно: status | servers | tools | refresh | connect <id> | "
+          "call <tool> [json] | disconnect\n")
 
 
 # 9. Интервью-инициализация ------------------------------------------------------
@@ -404,6 +461,7 @@ def print_help():
     print("  /mcp tools           — список доступных инструментов (результат Дня 16)")
     print("  /mcp refresh         — обновить каталог инструментов (discovery)")
     print("  /mcp connect <id>    — подключить MCP-сервер")
+    print("  /mcp call <tool> [{json}] — вызвать инструмент вручную")
     print("  /mcp disconnect      — закрыть MCP-соединения")
     print("  /help                — эта справка")
     print("  /exit                — завершить и сохранить состояние")

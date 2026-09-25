@@ -1,164 +1,101 @@
-# migr_plan_1.md — рабочий план этапа M1 «SDK + контракты инструментов»
+# migr_plan_1.md — рабочий план этапа M1 «HTTP-транспорт + конфиг реального сервера»
 
-> **Роль документа.** Рабочий план-алгоритм **одного этапа** миграции проекта `den_16`
-> на целевую архитектуру `Nedela_4/den_16/arch_den_16.md`. Разворачивает этап **M1** из
-> `migr_plan.md` §4. Закрывает установку MCP SDK и внутреннюю модель инструментов
-> (`arch_den_16.md` §2.2) — **без MCP-слоя и без сети**.
-> **Конец этого этапа — автоматический гейт в этап M2** (`migr_plan_2.md`).
-> Источники: `migr_plan.md` (эталон), `arch_den_16.md` §2.2, `Задание_d16.txt`
-> («Установите MCP SDK / клиент»), `Рекомендации_MCP_d16.txt` (ToolDescriptor —
-> внутренняя модель, не MCP).
-
-> **Синхронизировано с фактом реализации: 2026-09-24.** Правки внесены строго по
-> `README.md` (факт реализации) и `dev/migr_log.md` (история процесса) — оба
-> равноправные источники истины. `dev/migr_log.md` не изменялся; исходная версия —
-> в `dev/old_vers/`.
+> Рабочий план-алгоритм **одного этапа** миграции `den_16` (Ревизия 2, `dev/migr_plan.md`).
+> Разворачивает этап **M1**. **Конец этапа — гейт в M2** (`migr_plan_2.md`).
 
 ---
 ## 0. Паспорт этапа
 
 | Поле | Значение |
 |---|---|
-| Этап | **M1** — SDK + контракты инструментов |
-| Рабочий план | `dev/migr_plan_1.md` (этот файл) |
-| Зависит от | **M0** (baseline, служебка готова) |
-| Открывает | `dev/migr_plan_2.md` (M2 — Реестр: каталог + атомарный snapshot) |
-| Закрывает | `arch_den_16.md` §2.2 (core/tools.py: контракты без MCP SDK) |
-| Основные артефакты | venv (+`mcp`), `core/tools.py` (новый) |
-| Живой ключ | **Не нужен** (контракты — чистый Python) |
-| Меняет поведение | **Нет** (новый модуль, никем не импортируется до M6) |
+| Этап | **M1** — HTTP-транспорт + конфиг реального сервера |
+| Рабочий план | `dev/migr_plan_1.md` |
+| Зависит от | M0 |
+| Открывает | `dev/migr_plan_2.md` (M2 — реальное discovery) |
+| Тип изменений | Код продукта: `integrations/mcp/{transport,config,client,gateway}.py` |
+| Живой ключ | **Не нужен** (смоук — импорт/выбор транспорта; живой прогон — M2) |
+| Точка отката | Зелёный гейт M0→M1 |
 
-**Цель этапа.** Установить `mcp` SDK в venv недели (зависимость только для
-`integrations/mcp/`) и создать внутреннюю модель инструментов агента — контракты
-`ToolDescriptor`/`ToolCallRequest`/`ToolExecutionResult`/`ToolProvider`/
-`ToolCatalogSnapshot` — без единого импорта MCP SDK в `core/`.
+**Цель.** Добавить `HttpMCPTransport` (Streamable HTTP, SDK 2.2.0), выбор транспорта по
+конфигу и реальный сервер по умолчанию; устранить квирк чтения схемы тула (`input_schema`).
 
 ---
 
-## 1. Вход и предусловия
+## 1. Шаги этапа
 
-- M0 зелёный (baseline: L2 91 / L4 9 / гейт 13+2⚠; `import mcp` → ModuleNotFoundError).
-- venv недели: `requests`, `python-dotenv` (stdlib: `sqlite3`); `mcp` — отсутствует.
-- `core/` — 6 модулей дней 11–15 (контракты не трогать).
+### Шаг 1.1 — `HttpMCPTransport` (`integrations/mcp/transport.py`)
+- Добавить класс `HttpMCPTransport(MCPTransport)`:
+  - ленивый импорт внутри `initialize()`: `from mcp import ClientSession` +
+    `import mcp.client.streamable_http as sm` (SDK 2.2.0 — функция
+    `streamable_http_client`, **не** `streamablehttp_client`);
+  - хранит `endpoint` (str), `timeout_seconds`; при старте:
+    `self._streams = sm.streamable_http_client(self._endpoint)`;
+    `read, write = await self._streams.__aenter__()`; `ClientSession(read, write)`;
+    `await session.initialize()`;
+  - `list_tools()` — как в stdio, но с **фиксом схемы** (см. 1.2);
+  - `close()` — `__aexit__` по session и streams (по образцу stdio); ошибки →
+    `MCPConnectionError(server_id, …)`.
+- Сохранить общий помощник извлечения схемы (см. 1.2), чтобы stdio/http/fake не
+  расходились.
 
-**Предусловия:** `mcp` устанавливается **только в venv недели** (не глобально);
-`core/tools.py` не импортирует `mcp` и не импортируется существующими модулями
-(подключение — M6, DI); `requirements`-файла в проекте нет — версию SDK зафиксировать
-в `migr_log.md` (и в README на M8).
-
----
-
-## 2. Шаги этапа (исполняемый алгоритм)
-
-### Шаг 1.1 — Установить `mcp` SDK
-1. `../../.venv/bin/python -m pip install mcp` (Model Context Protocol Python SDK;
-   вызов pip-скрипта напрямую ненадёжен из-за shebang копированного venv; при
-   конфликте зависимостей — зафиксировать в карточке ошибки).
-2. `../../.venv/bin/python -m pip show mcp` → зафиксировать версию;
-   `../../.venv/bin/python -c "import mcp; print(mcp.__file__)"`.
-3. Проверить, что транзитивные зависимости не сломали `requests`/`dotenv`:
-   `python -c "import requests, dotenv"`.
-4. **Ожидаемый результат:** SDK установлен; версия зафиксирована; прежние
-   зависимости живы.
-
-### Шаг 1.2 — `core/tools.py`: контракты (arch §2.2)
-1. `ALL_WORKING_STAGES` — frozenset значений 5 рабочих стадий дня 15
-   (`new`, `planning`, `plan_approved`, `implementation`, `validation`) — **строками,
-   без импорта `state_machine`** (контракты не зависят от автомата; задел policy
-   фильтра по стадиям).
-2. `@dataclass(frozen=True) ToolDescriptor`: `name` (квалифицированное:
-   `mcp.<server>.<tool>` | `local.<tool>`), `description`, `input_schema: dict`,
-   `source: str` (`"local"|"mcp"`), `provider: str`, `original_name: str`;
-   дефолты заделов: `risk_level="unknown"`,
-   `allowed_stages=ALL_WORKING_STAGES`, `requires_confirmation=False`,
-   `enabled=True`.
-3. `@dataclass(frozen=True) ToolCallRequest` (задел дня 17+): `name`, `arguments: dict`.
-4. `@dataclass(frozen=True) ToolExecutionResult` (задел): `execution_id`, `tool`,
-   `status: str`, `summary: str`, `raw: object | None = None` (сырой ответ — только
-   текущий execution context, не в память).
-5. `class ToolProvider(ABC)`: `provider_id() -> str`, `discover() -> list[ToolDescriptor]`.
-6. `@dataclass(frozen=True) ToolCatalogSnapshot`: `version: int`,
-   `tools: tuple[ToolDescriptor, ...]`, `created_at: str` (ISO).
-7. **Ожидаемый результат:** контракты по arch §2.2 построчно; без импорта `mcp`,
-   без сети, без зависимостей от других модулей `core/`.
-
-### Шаг 1.3 — Примитив-смоук этапа (инлайн, `.tmp/`)
-```bash
-python - <<'EOF'
-# 1. import mcp — успешен (SDK установлен)
-# 2. from core.tools import (ToolDescriptor, ToolCallRequest,
-#    ToolExecutionResult, ToolProvider, ToolCatalogSnapshot, ALL_WORKING_STAGES)
-# 3. ToolDescriptor(name="mcp.demo.get_time", ..., source="mcp", provider="demo",
-#    original_name="get_time") — frozen, дефолты заделов на месте
-# 4. ToolCatalogSnapshot(version=1, tools=(...,), created_at=...) — frozen
-# 5. подкласс ToolProvider с discover() — инстанцируется
-EOF
+### Шаг 1.2 — Фикс чтения схемы тула (`input_schema`)
+SDK 2.2.0 отдаёт `Tool.input_schema` (snake_case), а не `inputSchema`. Ввести единый
+хелпер, например:
+```python
+def _tool_schema(t) -> dict:
+    schema = getattr(t, "input_schema", None)
+    if schema is None:
+        schema = getattr(t, "inputSchema", None)
+    if schema is None and isinstance(t, dict):
+        schema = t.get("input_schema") or t.get("inputSchema")
+    return schema or {"type": "object"}
 ```
-**Ожидаемый результат:** все блоки OK, EXIT 0; временные файлы (если есть) — только
-в `dev/tests_debug/.tmp/m1_<ts>/`.
+Применить в `StdioMCPTransport.list_tools` и `HttpMCPTransport.list_tools` (fake-транспорт
+работает с dict — остаётся совместим).
 
-### Шаг 1.4 — Проверка непротекания SDK
-1. `grep -rn "import mcp\|from mcp" core/ memory/ storage/ Kod.py` → **пусто**
-   (SDK — только для `integrations/mcp/`, которых ещё нет).
-2. `grep -rn "from core.tools\|import core.tools" core/ memory/ storage/ Kod.py`
-   → пусто (модуль подключается на M6).
-3. **Ожидаемый результат:** оба grep пусты; направление зависимостей чистое.
+### Шаг 1.3 — Конфиг реального сервера (`integrations/mcp/config.py`)
+- `DEFAULT_SERVERS`: сервер `weather` — `transport="http"`,
+  `endpoint=os.getenv("MCP_WEATHER_URL", "https://weatherapi.projecteol.ru/mcp/")`,
+  `enabled=True`, `trust_level="low"`; **демо-сервер `demo` (stdio) сохранить** (для
+  детерминированных тестов) — но по умолчанию активен реальный `weather`
+  (демо — при явном выборе/в тестах).
+- `_parse_server`: поддержать `endpoint` при `transport="http"`; при `stdio` — `command`.
 
-### Шаг 1.5 — Регрессия
-1. L1 `py_compile Kod.py core/*.py memory/*.py storage/*.py` → ok (включая новый
-   `core/tools.py`).
-2. L2 `unit_runner.py` → **91 OK, 0 FAIL** (новый модуль никого не ломает).
-3. L3/L4/гейт → без изменений (13+2⚠).
-**Ожидаемый результат:** полная нерегрессия.
+### Шаг 1.4 — Выбор транспорта (`gateway.py` + `client.py`)
+- `MCPGateway._make_client(server)`: ветка по `server.transport`:
+  `"http"` + `endpoint` → `HttpMCPTransport(server.server_id, server.endpoint, timeout)`;
+  иначе (`"stdio"`) → `StdioMCPTransport(...)`.
+- `MCPClient.__init__`: дефолтный транспорт — тоже по `config.transport`.
+- Сохранить инжекцию транспорта (тесты) без изменений.
 
----
-
-## 3. Выход этапа
-
-- venv недели с `mcp` SDK (версия зафиксирована).
-- `core/tools.py` — контракты внутренней модели инструментов.
-- Примитив-смоук этапа (инлайн или `dev/tests_debug/m1_smoke.py` — по решению
-  исполнителя; судьба смоуков этапов решается на M8, как в den_15).
-- Запись этапа **M1** в `dev/migr_log.md`.
+### Шаг 1.5 — Примитив-смоук этапа
+- Импорт `HttpMCPTransport`; выбор транспорта по `transport="http"`/`"stdio"`;
+- фикс схемы: объект-имитация Tool с `input_schema` → `_tool_schema` возвращает словарь.
 
 ---
 
-## 4. Автоматический гейт M1→M2
+## 2. Выход этапа
 
-Гейт считается **зелёным**, если одновременно:
-- [ ] `python -c "import mcp"` успешен; версия зафиксирована в `migr_log.md`;
-- [ ] `core/tools.py` импортируется; контракты соответствуют arch §2.2 построчно
-      (ToolDescriptor — 10 полей с дефолтами заделов; ToolCatalogSnapshot — frozen);
-- [ ] `grep "import mcp" core/ memory/ storage/ Kod.py` → пусто (SDK не протёк);
-- [ ] `grep "core.tools" core/ memory/ storage/ Kod.py` → пусто (подключение — M6);
-- [ ] L1 зелёный; L2 **91 OK, 0 FAIL**; L3/L4/гейт — без изменений (13+2⚠);
-- [ ] прежние зависимости (`requests`, `dotenv`) живы.
+- `HttpMCPTransport` в `transport.py`; фикс `input_schema`; реальный сервер в конфиге;
+  выбор транспорта по конфигу.
+- Смоук: импорт/выбор/фикс схемы — зелёные; SDK — только в `integrations/mcp/`.
+- Запись M1 в `migr_log.md`.
 
-**Зелёный** → запись M1 в `migr_log.md` (✅) → **перечитать `migr_plan.md`** →
-создать `migr_plan_2.md`.
-**Красный** → карточка ошибки `dev/logs_reports/errors/error_<ts>.md`, этап M1 открыт.
+## 3. Гейт M1→M2
 
----
+- [ ] `HttpMCPTransport` импортируется; функция SDK 2.2.0 вызывается корректно;
+- [ ] выбор транспорта по `MCPServerConfig.transport` работает (http/stdio);
+- [ ] схема тула читается из `input_schema` (и совместимо с dict/`inputSchema`);
+- [ ] реальный сервер в `DEFAULT_SERVERS` (`weather`, env `MCP_WEATHER_URL`);
+- [ ] grep: `mcp` SDK — только в `integrations/mcp/`; `core/memory/storage` — чисто;
+- [ ] L1 зелёный; L2 **112 OK**; L3/L4/гейт — без регрессии.
 
-## 5. Запись в `migr_log.md` (форма §6.4 `migr_plan.md`)
+**Зелёный** → запись M1 ✅ → перечитать `migr_plan.md` → `migr_plan_2.md`.
+**Красный** → карточка ошибки, этап открыт.
 
-```text
-## Этап M1 — SDK + контракты инструментов
-- Статус: ✅ завершён | ⚠️ обход | ❌ открыт
-- Было: mcp SDK отсутствовал; core/tools.py не существовал
-- Стало: <mcp <версия> в venv; контракты ToolDescriptor/ToolCallRequest/
-  ToolExecutionResult/ToolProvider/ToolCatalogSnapshot/ALL_WORKING_STAGES>
-- Проверка: <import mcp; примитив-смоук; grep-непротекание; L1/L2/L3/L4/гейт>
-- Артефакты: venv (+mcp), core/tools.py
-- Спорное/риски: <версия SDK; транзитивные зависимости — если есть>
-- Перечитывание migr_plan.md перед следующим этапом: ✅ выполнено (дата/время)
-- Гейт M1→M2: ✅ пройден | ❌ не пройден
-```
+## 4. Запись в `migr_log.md`
+По форме §6.4 `migr_plan.md` (Статус/Было/Стало/Проверка/Артефакты/Риски/Перечитывание/Гейт).
 
----
-
-## 6. Следующий шаг
-
-Перечитать актуальный `dev/migr_plan.md`, затем приступить к **M2** по
-`dev/migr_plan_2.md` (`core/tool_registry.py`: ToolRegistry — каталог всех
-источников, атомарный snapshot, коллизии имён, недоступные провайдеры).
+## 5. Следующий шаг
+Перечитать `dev/migr_plan.md` → M2 (`dev/migr_plan_2.md`): реальное discovery к
+`weatherapi` (`--mcp-probe`, `/mcp refresh`, `/mcp status`, деградация).

@@ -93,6 +93,9 @@ class ProposedAction:
 
     Поля покрывают каталог-пример (`arch_den_14.md` §2.4); расширяемые поля
     (language, target_file, package, ...) добавляются под конкретные инварианты.
+    Поля MCP-вызова (action_type/tool_name/arguments, День 16) — опциональны и
+    обратно совместимы: одно правило «нельзя менять схему БД» работает и для
+    локальной функции, и для MCP-инструмента.
     """
 
     description: str
@@ -100,6 +103,10 @@ class ProposedAction:
     adds_dependency: bool = False
     changes_database_schema: bool = False
     language: Optional[str] = None
+    # --- MCP-вызов (День 16, опционально) ---
+    action_type: str = ""              # "tool_call" | "local" | ...
+    tool_name: Optional[str] = None    # квалифицированное имя ("mcp.weather.…")
+    arguments: Optional[dict] = None   # аргументы вызова
 
 
 def _rule_for(inv: Invariant):
@@ -120,6 +127,10 @@ def _rule_for(inv: Invariant):
         return lambda a: bool(a.adds_dependency)
     if inv.id == "database.no-schema-changes":
         return lambda a: bool(a.changes_database_schema)
+    if inv.id.startswith("tool.deny."):
+        # Запрет конкретного инструмента (День 16): id «tool.deny.<qualified_name>».
+        banned = inv.id.split(".", 2)[2]
+        return lambda a: a.action_type == "tool_call" and a.tool_name == banned
     return None
 
 

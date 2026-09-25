@@ -241,6 +241,59 @@ def test_mcp_probe_subprocess():
     print("[smoke] CLI --mcp-probe (fake, exit 0) OK")
 
 
+def test_mcp_tool_use_in_process():
+    """Полный LLM tool-use in-process (Ревизия 2): намерение → вызов тула →
+    результат → ответ; аудит записан; TaskStage не меняется."""
+    os.makedirs(TMP_ROOT, exist_ok=True)
+    tmp = tempfile.mkdtemp(prefix="smoke_tooluse_", dir=TMP_ROOT)
+    import integrations.mcp.gateway as mcp_gateway_mod
+    from integrations.mcp.config import MCPServerConfig
+    from integrations.mcp.transport import FakeMCPTransport
+    from integrations.mcp.provider import MCPToolProvider
+    from core.tool_registry import ToolRegistry
+    from core.tool_policy import ToolPolicy
+    from core.tool_executor import ToolExecutor
+    from core.invariants import RuleBasedChecker
+
+    tools = [{"name": "search_locations", "description": "city search",
+              "inputSchema": {"type": "object",
+                              "properties": {"query": {"type": "string"}},
+                              "required": ["query"]}}]
+    transport = FakeMCPTransport(tools, server_id="weather",
+                                 tool_results={"search_locations": '{"results":[{"name":"Moscow"}]}'})
+    servers = [MCPServerConfig(server_id="weather", transport="http",
+                               endpoint="https://x/mcp/", enabled=True, trust_level="low")]
+
+    class FakeSync(mcp_gateway_mod.MCPGatewaySync):
+        def __init__(self, srvs, transports=None):
+            self._gateway = mcp_gateway_mod.MCPGateway(srvs, {"weather": transport})
+
+        def _run(self, coro):
+            return mcp_gateway_mod.asyncio.run(coro)
+
+    repo = ProfileRepository(os.path.join(tmp, "profiles.db"))
+    store = Store(os.path.join(tmp, "users"), profile_repo=repo)
+    memory = MemoryManager(default_layers(store))
+    agent = Agent(MockClient(), memory, PromptBuilder("Ты ассистент"), store,
+                  user_id="tool_user", executor=StubExecutor())
+    agent.initialize_user("tool_user", "Т", {"style": "a", "constraints": "b", "context": "c"})
+    gateway = FakeSync(servers)
+    registry = ToolRegistry()
+    registry.add_provider(MCPToolProvider(gateway))
+    agent.mcp_gateway = gateway
+    agent.tool_registry = registry
+    gateway.start()
+    registry.refresh()
+    agent.tool_executor = ToolExecutor(registry, ToolPolicy(), gateway, store=store,
+                                       checker=RuleBasedChecker())
+    agent.deliver.add("tools")
+    answer = agent.respond("найди город Москва")
+    assert "Moscow" in answer, answer
+    audit = store.load_tool_audit("tool_user", agent.task)
+    assert audit and audit[0]["status"] == "succeeded", audit
+    print("[smoke] LLM tool-use in-process (Москва → вызов → ответ) OK")
+
+
 # Обёртка для test_mcp_probe_subprocess: подмена модулей до run_mcp_probe().
 # Kod.py парсит argv при импорте — argv передаётся как есть (флаг --mcp-probe
 # обрабатывает сам wrapper, вызывая run_mcp_probe напрямую).
@@ -305,6 +358,7 @@ def main():
     test_fsm_in_process()
     test_cli_fsm_subprocess()
     test_mcp_in_process()
+    test_mcp_tool_use_in_process()
     test_mcp_probe_subprocess()
     print("SMOKE OK: exit 0")
     return 0
