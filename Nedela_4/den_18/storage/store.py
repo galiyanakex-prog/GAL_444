@@ -338,3 +338,20 @@ class Store:
         except OSError:
             return []
         return records
+
+    # --- Планировщик фоновых задач (День 18) ---------------------------------------
+    def scheduler_dir(self, user_id: str) -> str:
+        """Каталог данных планировщика: users/<id>/integrations/mcp/scheduler/."""
+        return os.path.join(self.mcp_dir(user_id), "scheduler")
+
+    def scheduler_path(self, user_id: str, name: str) -> str:
+        """Путь JSON-файла планировщика (jobs/observations/summaries)."""
+        return os.path.join(self.scheduler_dir(user_id), f"{safe_name(name)}.json")
+
+    def read_scheduler(self, user_id: str, name: str, default):
+        """Данные планировщика; отсутствующий/битый файл → default (не падает)."""
+        return self.read_json(self.scheduler_path(user_id, name), default)
+
+    def write_scheduler(self, user_id: str, name: str, data) -> str:
+        """Пишет JSON планировщика (каталог scheduler создаётся). Возвращает путь."""
+        return self.write_json(self.scheduler_path(user_id, name), data)

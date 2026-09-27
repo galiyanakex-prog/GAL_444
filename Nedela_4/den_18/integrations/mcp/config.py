@@ -19,6 +19,12 @@ WEATHER_MCP_URL = os.getenv("MCP_WEATHER_URL", "https://weatherapi.projecteol.ru
 # Сервер задания Дня 17 (инструмент `get_time`); переопределяется env-переменной.
 TIME_MCP_URL = os.getenv("MCP_SERVER_URL", "http://91.188.212.77:8000/mcp")
 
+# Сервер планировщика (День 18, задание 1); переопределяется env-переменной.
+SCHEDULER_MCP_URL = os.getenv("SCHEDULER_MCP_URL", "http://127.0.0.1:8010/mcp")
+
+# Сервер пайплайна (День 18, задание 2); переопределяется env-переменной.
+PIPELINE_MCP_URL = os.getenv("PIPELINE_MCP_URL", "http://127.0.0.1:8020/mcp")
+
 
 @dataclass(frozen=True)
 class MCPServerConfig:
@@ -51,6 +57,20 @@ DEFAULT_SERVERS: tuple[MCPServerConfig, ...] = (
         server_id="weather",
         transport="http",
         endpoint=WEATHER_MCP_URL,
+        enabled=True,
+        trust_level="low",
+    ),
+    MCPServerConfig(
+        server_id="scheduler",
+        transport="http",
+        endpoint=SCHEDULER_MCP_URL,
+        enabled=True,
+        trust_level="low",
+    ),
+    MCPServerConfig(
+        server_id="pipeline",
+        transport="http",
+        endpoint=PIPELINE_MCP_URL,
         enabled=True,
         trust_level="low",
     ),

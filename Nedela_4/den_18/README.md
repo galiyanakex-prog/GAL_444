@@ -1,4 +1,4 @@
-# День 17 — Первый инструмент MCP (`get_time`)
+# День 18 — Планировщик, пайплайн и несколько MCP-серверов
 
 > **Неделя 4** — «Инструменты и интеграции: MCP, тулинг, изоляция прав».
 > День 16 — стартовый день недели: поверх наследия дней 11–15 (явная модель памяти,
@@ -16,15 +16,25 @@
 > ядро MCP-сервера — маппинг «тул ↔ HTTP-реквест» (description + input-схема +
 > `CallToolResult`).
 >
-> **День 17 (эта редакция).** Инфраструктура MCP дня 16 перенесена **без изменений**;
-> добавлен **конкретный инструмент задания** — `get_time(timezone_name) -> ISO 8601`
-> с сервера задания `http://91.188.212.77:8000/mcp` (env `MCP_SERVER_URL`). Требование
-> дня 17: **вызвать инструмент из приложения** (п. 4.1 — LLM сам предлагает вызов через
-> `Agent._respond_with_tools`) и **получить и использовать результат** (п. 4.2 — результат
-> возвращается в модель и используется в финальном ответе). Демонстрация — на **живом**
-> LLM + **живом** сервере задания: «который час в Москве?» → `get_time({"timezone_name":
-> "Europe/Moscow"})` → «В Москве сейчас 12:52».
-> Формат результата — Код. Целевая архитектура — `arch_den_16.md` (актуализирована под день 17).
+> **День 17 (наследие).** Инструмент задания `get_time(timezone_name) -> ISO 8601`
+> с сервера `http://91.188.212.77:8000/mcp` (env `MCP_SERVER_URL`): LLM сам вызывает
+> инструмент (`Agent._respond_with_tools`) и **использует результат** в финальном ответе.
+> Демонстрация: «который час в Москве?» → `get_time({"timezone_name":"Europe/Moscow"})`
+> → «В Москве сейчас 12:52».
+>
+> **День 18 (эта редакция).** Поверх MCP-инфраструктуры дней 16–17 добавлены **три
+> возможности** (три задания `Задание_d18.txt`):
+> 1. **Планировщик и фоновые задачи** — MCP-инструмент с отложенным/периодическим
+>    выполнением (`schedule_reminder`/`schedule_collection`/`run_due`/`get_summary`),
+>    данные в JSON, агрегированная сводка; агент работает **24/7** через **внешний
+>    worker** (не LLM — «у агента нет heartbeat»). Формат отчёта — **Видео + Код**.
+> 2. **Пайплайн из MCP-инструментов** — `search → summarize → saveToFile`,
+>    автовыполнение цепочки и передача данных между инструментами. Формат — **Код**.
+> 3. **Несколько MCP-серверов** — выбор нужного инструмента, маршрутизация, длинный
+>    флоу с тулами разных серверов. Формат — **Код**.
+>
+> Целевая архитектура — `arch.md` (актуализирована под день 18). Сценарий ручной
+> проверки (три сценария для видео) — `dev/Проверка.md`.
 
 ## Суть проекта
 
@@ -537,6 +547,42 @@ StateMachine решает, можно ли
 Store сохраняет конфиг и каталог.   ← users/<id>/integrations/mcp/
 ```
 
+## День 18 — планировщик, пайплайн, несколько MCP-серверов
+
+### Планировщик и фоновые задачи (задание 1)
+
+Фоновое выполнение обеспечивает **внешний worker** (поток stdlib `threading`), а
+**не LLM** — канон куратора «у агента нет heartbeat». LLM участвует только в
+формировании текста сводки (по запросу); готовая сводка отдаётся **без нового
+запроса к модели**.
+
+- **Ядро** (`integrations/scheduler/`): `models.py` (`Job`/`Observation`/`Summary`/
+  `JobState`), `store.py` (`SchedulerStore` через фасад `Store`), `runner.py`
+  (`Scheduler`: `add_job`/`due_jobs`/`run_once`/`start`/`stop`), `aggregator.py`
+  (`aggregate` → `count/min/max/avg/last`). Только stdlib, без MCP SDK.
+- **MCP-сервер** (`integrations/mcp/scheduler_server.py`, по образцу
+  `doc/mcp/mcp-time-server/time_server_http.py`): тулы `schedule_reminder`,
+  `schedule_collection`, `record_observation`, `run_due`, `get_summary`,
+  `latest_summary`, `list_jobs`. HTTP :8010 (env `SCHEDULER_MCP_URL`).
+- **Хранение**: `users/<id>/integrations/mcp/scheduler/{jobs,observations,summaries}.json`.
+- **Запуск 24/7**: `python Kod.py --mcp --scheduler [--scheduler-interval 60]`.
+
+### Пайплайн из MCP-инструментов (задание 2)
+
+Цепочка `search → summarize → saveToFile` (сервер `integrations/mcp/pipeline_server.py`,
+HTTP :8020, env `PIPELINE_MCP_URL`); автовыполнение и передача данных между шагами —
+`core/tool_pipeline.py` (`PipelineStep`/`Pipeline`/`run_pipeline`: результат шага N →
+аргумент N+1 через `input_key`; **не трогает `StateMachine`**). Команда:
+`/mcp pipeline <запрос>`. Каждый вызов идёт через `ToolExecutor` → аудит.
+
+### Несколько MCP-серверов (задание 3)
+
+`DEFAULT_SERVERS`: `time`, `weather`, `scheduler`, `pipeline`, `demo`. Маршрутизация
+по квалификации `mcp.<server>.<tool>` (`MCPGateway` + `ToolRegistry`); длинный флоу —
+несколько последовательных tool-use итераций в одном запросе
+(`Agent._respond_with_tools`, лимит `max_tool_iterations`). Команды: `/mcp servers`,
+`/mcp tools`, `/mcp route <текст>`.
+
 ## Команды REPL
 
 Команды дней 11–15 сохранены полностью; новое — семейство `/mcp` (6 форм).
@@ -580,6 +626,10 @@ Store сохраняет конфиг и каталог.   ← users/<id>/integr
 | `/mcp connect <id>` | ← НОВОЕ (Д16): поднять соединение с MCP-сервером | 37 |
 | `/mcp call <tool> [{json}]` | ← НОВОЕ (Ревизия 2): вызвать инструмент вручную | 44 |
 | `/mcp disconnect` | ← НОВОЕ (Д16): закрыть MCP-соединения | — |
+| `/mcp summary [N]` | ← НОВОЕ (Д18): последняя сохранённая сводка планировщика (без нового запроса к LLM) | 1.4 |
+| `/mcp jobs` | ← НОВОЕ (Д18): задачи планировщика (`state`/`interval`/`runs`) | 1.3 |
+| `/mcp pipeline <запрос>` | ← НОВОЕ (Д18): пайплайн `search → summarize → saveToFile` | 2.3 |
+| `/mcp route <текст>` | ← НОВОЕ (Д18): объяснить выбор инструмента/сервера (без вызова) | 3.2 |
 | `/help` | список команд | — |
 | `/exit` | `save_state()` (+ сейв `task_state.json` с `transition_log`) и выход | 12, 25 |
 
@@ -608,13 +658,20 @@ python Kod.py --mcp-probe                  # one-shot: подключиться 
 MCP_SERVER_URL=http://91.188.212.77:8000/mcp python Kod.py --mcp-probe  # сервер задания (get_time)
 MCP_WEATHER_URL=https://weatherapi.projecteol.ru/mcp/ python Kod.py --mcp-probe  # явный endpoint погоды
 python -m integrations.mcp.demo_server     # локальный MCP-сервер (stdio) отдельно
+
+# День 18 — планировщик 24/7 и новые серверы
+python Kod.py --mcp --scheduler            # фоновый worker 24/7 (сбор + сводка)
+python Kod.py --mcp --scheduler --scheduler-interval 5   # укороченный интервал (демо)
+python -m integrations.mcp.scheduler_server             # MCP-сервер планировщика (HTTP :8010)
+python -m integrations.mcp.pipeline_server              # MCP-сервер пайплайна (HTTP :8020)
 ```
 
-**Флаги (14):** `--user <id>`, `--profile <id>`, `--deliver <слои>` (по умолчанию полный
+**Флаги (16):** `--user <id>`, `--profile <id>`, `--deliver <слои>` (по умолчанию полный
 канонический набор `DELIVERABLE`), `--mock`, `--fresh`, `--log`, `--token-log`,
 `--max-tokens`, `--price-in` / `--price-out` (₽ за 1M, по умолчанию 11 / 33), `--budget <N>`,
 `--memory-dir` (перенос хранилища — используется тестами для изоляции), **`--mcp`**
-(включить MCP-слой в REPL), **`--mcp-probe`** (one-shot результат задания).
+(включить MCP-слой в REPL), **`--mcp-probe`** (one-shot результат задания),
+**`--scheduler`** (фоновый worker 24/7, День 18), **`--scheduler-interval <сек>`**.
 
 Все пути строятся от `BASE_DIR`; ключ — `API_KEY` из `.env` (`load_dotenv()`).
 При `--mock`, отсутствии ключа или `API_KEY=test-key` автоматически выбирается `MockClient`.

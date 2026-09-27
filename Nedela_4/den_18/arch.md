@@ -1,4 +1,4 @@
-# arch.md — итоговая целевая архитектура проекта `den_17` «Подключение MCP»
+# arch.md — итоговая целевая архитектура проекта `den_18` «Планировщик, пайплайн, мультисерверность»
 
 > Итоговый документ: описывает состояние, которое должно получиться **после завершения**
 > проекта `den_17`. Базируется на `Nedela_3/den_15/arch_den_15.md` (персонализированный
@@ -32,6 +32,16 @@
 > `integrations/mcp/transport.py` (грациозная деградация при недоступном сервере),
 > `core/llm_client.py` (детерминированный триггер `get_time` в `MockClient`). История
 > Ревизии 2 сохранена в `dev/old_vers/3/`; журнал — `dev/migr_log.md` (этапы M0–M6).
+>
+> **Ревизия 4 (день 18, 2026-09-27).** `den_18` — структурная копия `den_17`; вся
+> MCP-инфраструктура Ревизий 2–3 перенесена **без изменений**. Поверх неё добавлены
+> **три возможности** (`Задание_d18.txt`): (1) **планировщик и фоновые задачи** —
+> MCP-инструмент с отложенным/периодическим выполнением, JSON-хранилище, агрегированная
+> сводка, режим **24/7** через **внешний worker** (не LLM); (2) **пайплайн из
+> MCP-инструментов** (`search → summarize → saveToFile`, автовыполнение цепочки,
+> передача данных); (3) **несколько MCP-серверов** (выбор инструмента, маршрутизация,
+> длинный флоу). История Ревизии 3 сохранена в `dev/old_vers/4/`; журнал — `dev/migr_log.md`
+> (этапы M0–M6). Сценарий ручной проверки — `dev/Проверка.md` (три сценария).
 
 ---
 
@@ -559,6 +569,48 @@ LLM tool-use инструмента задания (Ревизия 3, день 1
 без --mcp / без /mcp: агент работает ровно как den_15 (MCP disabled by default)
 ```
 
+### 2.9 Сводная механика дня 18 (три задания)
+
+```
+Задание 1 — планировщик и фоновые задачи (24/7):
+  запуск Kod.py --mcp --scheduler [--scheduler-interval N]
+  → setup_scheduler: SchedulerStore(Store, user) + Scheduler
+      add_job("collect", interval=N, payload={source:"heartbeat", ticks:1})
+      add_job("summary", interval=N)
+  → Scheduler.start() — внешний worker (threading), НЕ LLM
+      тик: due_jobs(next_run_at <= now) → _execute:
+        collect → Observation.new(...) → JSON observations.json
+        summary → aggregate(...) → JSON summaries.json
+      next_run_at += interval (одноразовая → done)
+  → /mcp jobs   → список задач (state/interval/runs)
+  → /mcp summary → последняя СОХРАНЁННАЯ сводка (без нового запроса к модели)
+  → /exit/EOF/Ctrl+C → stop_scheduler (чистая остановка)
+  MCP-сервер планировщика (integrations/mcp/scheduler_server.py, HTTP :8010):
+    schedule_reminder / schedule_collection / record_observation / run_due /
+    get_summary / latest_summary / list_jobs — над тем же ядром
+
+Задание 2 — пайплайн из MCP-инструментов:
+  /mcp pipeline <запрос> → Pipeline("report", [
+      PipelineStep("mcp.pipeline.search", {"query": <запрос>}),
+      PipelineStep("mcp.pipeline.summarize", input_key="text"),
+      PipelineStep("mcp.pipeline.saveToFile", {"name":"report"}, input_key="content")])
+  → run_pipeline: каждый шаг через ToolExecutor (policy → gateway.call_tool → аудит)
+      результат N (summary) → аргумент N+1 (input_key)  ← корректная передача данных
+  → сервер integrations/mcp/pipeline_server.py (search/summarize/saveToFile/readFile)
+  → файл users/<id>/pipeline/report.txt; аудит — 3 записи succeeded
+  (TaskStage не меняется — инструмент ≠ переход)
+
+Задание 3 — несколько MCP-серверов:
+  DEFAULT_SERVERS: time, weather, scheduler, pipeline, demo
+  → ToolRegistry.refresh(): discover у всех → квалификация mcp.<server>.<tool>
+  → выбор нужного инструмента (описание/схема) → маршрутизация на нужный сервер
+  → длинный флоу: несколько последовательных tool-use итераций в ОДНОМ запросе
+      (Agent._respond_with_tools, лимит max_tool_iterations)
+  → /mcp servers | /mcp tools | /mcp route <текст>
+
+без --mcp / без --scheduler: агент работает ровно как den_15 (MCP off, worker не поднят)
+```
+
 ---
 
 ## 3. Служебное пространство `dev/` (проект про проект)
@@ -826,8 +878,28 @@ read-only тулов, local-провайдер, сравнение токен-ф
    (status/servers/tools/refresh/connect/call/disconnect) + флаги `--mcp`,
    `--mcp-probe`; REPL синхронный (async — внутри gateway).
 6. **Служебное** (`dev/`) — миграция по плану-эталону (Ревизия 2, M0–M12; Ревизия 3,
-   M0–M6), L2 (+test_mcp.py на FakeMCPTransport), L4 (+scenario_mcp_discovery,
-   scenario_llm_tool_use, scenario_tool_denied), гейт 21/21, приёмка 54/54.
+   M0–M6; Ревизия 4, M0–M6), L2 (+test_mcp.py на FakeMCPTransport), L4
+   (+scenario_mcp_discovery, scenario_llm_tool_use, scenario_tool_denied), гейт 21/21,
+   приёмка 54/54; сценарий ручной проверки `dev/Проверка.md` (три сценария дня 18).
+
+### 7.2.1 Дополнение дня 18 (Ревизия 4)
+
+Три новых возможности над MCP-инфраструктурой дней 16–17:
+
+- **Планировщик** (`integrations/scheduler/` + `integrations/mcp/scheduler_server.py`):
+  ядро на stdlib (models/store/runner/aggregator), JSON-хранилище через `Store`,
+  внешний worker (`threading`) как 24/7 heartbeat, агрегированная сводка
+  (`count/min/max/avg/last`); фоновая задача живёт в `JobState`, **не** в `TaskStage`.
+- **Пайплайн** (`integrations/mcp/pipeline_server.py` + `core/tool_pipeline.py`):
+  `search → summarize → saveToFile`, автовыполнение цепочки, передача данных между
+  шагами через `input_key`; каждый шаг — через `ToolExecutor` (policy + аудит).
+- **Мультисерверность** (`integrations/mcp/config.py` + `core/agent.py`): набор
+  `time`/`weather`/`scheduler`/`pipeline`/`demo`; выбор инструмента по описанию/схеме;
+  маршрутизация по `mcp.<server>.<tool>`; длинный флоу — несколько tool-use итераций
+  в одном запросе (`Agent._respond_with_tools`).
+
+Неизменны: `TaskStage`, `InvariantChecker`, память, `PromptBuilder`-контракты,
+`MCP off` по умолчанию; SDK — только в `integrations/mcp/`.
 
 Ключевые принципы:
 

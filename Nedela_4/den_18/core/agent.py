@@ -220,6 +220,9 @@ class Agent:
         self.tool_registry = None
         self.tool_executor = None
         self.tool_policy = None
+        # Планировщик фоновых задач (День 18): внешний worker, не LLM. None — фон
+        # не поднят (без --scheduler поведение = den_15). Инжектируется в DI.
+        self.scheduler = None
         # Лимит итераций агентного tool-use цикла (защита от зацикливания).
         self.max_tool_iterations = 5
 

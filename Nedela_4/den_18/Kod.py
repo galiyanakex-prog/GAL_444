@@ -106,6 +106,11 @@ parser.add_argument("--mcp", action="store_true",
 parser.add_argument("--mcp-probe", action="store_true",
                     help="One-shot: подключиться к MCP, вывести список инструментов "
                          "и выйти (результат задания Дня 16).")
+parser.add_argument("--scheduler", action="store_true",
+                    help="Поднять фоновый планировщик (24/7): периодический сбор данных "
+                         "и регулярная сводка в JSON (задание Дня 18).")
+parser.add_argument("--scheduler-interval", type=float, default=60.0,
+                    help="Интервал планировщика в секундах (по умолчанию 60).")
 args = parser.parse_args()
 
 # Корень хранилища памяти: users/ рядом со скриптом (BASE_DIR), если не задано.
@@ -162,11 +167,14 @@ def append_token_log(exchange, prompt_tokens, cost_rubles):
 
 
 # 8. Композиция объектов (DI) ---------------------------------------------------
-def build_agent(user_id=None, mock=False, mcp_enabled=False):
+def build_agent(user_id=None, mock=False, mcp_enabled=False, scheduler_enabled=False,
+                scheduler_interval=60.0):
     """Собирает Store + профиль-репозиторий + слои + LLM-клиент в Agent.
 
     MCP-слой опционален (mcp_enabled=False по умолчанию — поведение = den_15):
     gateway → provider → ToolRegistry; каталог сохраняется через Store.
+    Планировщик (День 18, scheduler_enabled) — фоновый worker 24/7, независимый
+    от LLM; по умолчанию не поднимается.
     """
     store = Store(MEMORY_ROOT, log=log_line)
     repo = ProfileRepository(os.path.join(MEMORY_ROOT, "profiles.db"), log=log_line)
@@ -229,7 +237,41 @@ def build_agent(user_id=None, mock=False, mcp_enabled=False):
                     "created_at": snap.created_at})
         except Exception as error:
             log_line(f"[MCP] стартовое discovery не удалось: {error}")
+
+    # Планировщик фоновых задач (День 18): внешний worker (не LLM). Собирается
+    # только при явном включении; привязка к user_id — после идентификации
+    # (setup_scheduler в main), т.к. user_id может задаваться интерактивно.
+    agent._scheduler_enabled = bool(scheduler_enabled)
+    agent._scheduler_interval = scheduler_interval
     return agent
+
+
+def setup_scheduler(agent: Agent, user_id: str, interval: float = 60.0):
+    """Поднять фоновый планировщик 24/7 (внешний worker, не LLM).
+
+    Дефолтное расписание: периодический сбор данных + регулярная сводка.
+    Останавливается при /exit / EOF / Ctrl+C (stop_scheduler).
+    """
+    from integrations.scheduler.store import SchedulerStore
+    from integrations.scheduler.runner import Scheduler
+
+    sched_store = SchedulerStore(agent.store, user_id or "scheduler")
+    scheduler = Scheduler(sched_store, log=log_line)
+    scheduler.add_job("collect", interval_seconds=interval,
+                      payload={"source": "heartbeat", "ticks": 1})
+    scheduler.add_job("summary", interval_seconds=interval)
+    agent.scheduler = scheduler
+    scheduler.start()
+    print(f"[Планировщик] Фоновый worker запущен (24/7), интервал {interval:g} c. "
+          f"Данные: users/{user_id}/integrations/mcp/scheduler/")
+    return scheduler
+
+
+def stop_scheduler(agent: Agent):
+    """Остановить фоновый worker чисто (идемпотентно)."""
+    if getattr(agent, "scheduler", None) is not None:
+        agent.scheduler.stop()
+        agent.scheduler = None
 
 
 # 8.1 One-shot результат задания Дня 16: --mcp-probe ------------------------------
@@ -272,11 +314,94 @@ def run_mcp_probe() -> int:
     return 0
 
 
-# 8.2 Семейство команд /mcp (День 16) ----------------------------------------------
+# 8.2 Семейство команд /mcp (День 16 → День 18) -------------------------------------
+def _scheduler_store(agent):
+    """Хранилище планировщика текущего пользователя (или None)."""
+    from integrations.scheduler.store import SchedulerStore
+    user_id = agent.user_id or "scheduler"
+    return SchedulerStore(agent.store, user_id)
+
+
 def handle_mcp_command(agent: Agent, user_input: str):
-    """Разбирает /mcp status|servers|tools|refresh|connect|disconnect."""
+    """Разбирает /mcp status|servers|tools|refresh|connect|call|disconnect|summary|jobs|pipeline|route."""
     parts = user_input.split()
     sub = parts[1] if len(parts) > 1 else ""
+
+    # Команды планировщика (День 18) доступны и без --mcp (фон — отдельная опция).
+    if sub == "summary":
+        window = int(parts[2]) if len(parts) > 2 and parts[2].isdigit() else 0
+        sched_store = _scheduler_store(agent)
+        summary = sched_store.latest_summary()
+        if summary is not None and window == 0:
+            # Уже сохранённая сводка — без нового запроса к модели (канон).
+            print(f"[Планировщик] Последняя сохранённая сводка "
+                  f"({summary.created_at}):\n{summary.text}\n")
+            return
+        from integrations.scheduler.aggregator import aggregate
+        fresh = aggregate(sched_store.list_observations(), window=window)
+        sched_store.save_summary(fresh)
+        print(f"[Планировщик] Сводка (окно {window or 'все'}):\n{fresh.text}\n")
+        return
+
+    if sub == "jobs":
+        sched_store = _scheduler_store(agent)
+        jobs = sched_store.load_jobs()
+        if not jobs:
+            print("[Планировщик] Задач нет (запустите с флагом --scheduler).\n")
+            return
+        print(f"[Планировщик] Задачи ({len(jobs)}):")
+        for job in jobs:
+            print(f"  {job.job_id} [{job.kind}] state={job.state} "
+                  f"interval={job.interval_seconds}s next={job.next_run_at} "
+                  f"runs={job.run_count}")
+        print()
+        return
+
+    if sub == "pipeline":
+        # /mcp pipeline <запрос> — автоцепочка search → summarize → saveToFile.
+        if len(parts) < 3:
+            print("[Пайплайн] Использование: /mcp pipeline <запрос>\n")
+            return
+        if agent.tool_executor is None:
+            print("[Пайплайн] Исполнитель инструментов не собран (нужен --mcp).\n")
+            return
+        from core.tool_pipeline import Pipeline, PipelineStep, run_pipeline
+        query = user_input.split(None, 2)[2]
+        pipeline = Pipeline("report", [
+            PipelineStep("mcp.pipeline.search", {"query": query}),
+            PipelineStep("mcp.pipeline.summarize", input_key="text"),
+            PipelineStep("mcp.pipeline.saveToFile", {"name": "report"}, input_key="content"),
+        ])
+        run = run_pipeline(pipeline, agent.tool_executor, user_id=agent.user_id,
+                           task=agent.task,
+                           task_stage=(agent.task_state.stage.value if agent.task_state else ""),
+                           constraints=agent.constraints)
+        print(f"[Пайплайн] {run.name}: {'OK' if run.ok else 'FAIL'}")
+        for step in run.steps:
+            print(f"  {step['tool']}: {step['status']}")
+        print(f"[Пайплайн] Результат: {run.output[:200]}\n")
+        return
+
+    if sub == "route":
+        # /mcp route <текст> — объяснить выбор инструмента/сервера (без вызова).
+        if len(parts) < 3:
+            print("[Маршрут] Использование: /mcp route <текст запроса>\n")
+            return
+        if agent.tool_registry is None:
+            print("[Маршрут] Реестр не собран (нужен --mcp).\n")
+            return
+        query = user_input.split(None, 2)[2].lower()
+        snap = agent.tool_registry.snapshot()
+        print(f"[Маршрут] Запрос: «{query}»; каталог v{snap.version}, "
+              f"тулов: {len(snap.tools)}")
+        matched = [t for t in snap.tools
+                   if any(word in t.name.lower() or word in (t.description or "").lower()
+                          for word in query.split())]
+        for tool in (matched or snap.tools):
+            mark = "→" if tool in matched else " "
+            print(f"  {mark} {tool.name} [{tool.provider}] — {tool.description or '—'}")
+        print()
+        return
 
     if agent.mcp_gateway is None:
         print("[MCP] MCP-слой выключен (запустите с флагом --mcp).\n")
@@ -407,7 +532,8 @@ def handle_mcp_command(agent: Agent, user_input: str):
 
     print(f"[MCP] Неизвестная подкоманда: {sub or '(пусто)'}. "
           "Доступно: status | servers | tools | refresh | connect <id> | "
-          "call <tool> [json] | disconnect\n")
+          "call <tool> [json] | disconnect | summary [N] | jobs | "
+          "pipeline <запрос> | route <текст>\n")
 
 
 # 9. Интервью-инициализация ------------------------------------------------------
@@ -463,6 +589,10 @@ def print_help():
     print("  /mcp connect <id>    — подключить MCP-сервер")
     print("  /mcp call <tool> [{json}] — вызвать инструмент вручную")
     print("  /mcp disconnect      — закрыть MCP-соединения")
+    print("  /mcp summary [N]     — последняя сохранённая сводка планировщика")
+    print("  /mcp jobs            — задачи планировщика (24/7)")
+    print("  /mcp pipeline <запрос> — пайплайн search→summarize→saveToFile")
+    print("  /mcp route <текст>   — объяснить выбор инструмента/сервера")
     print("  /help                — эта справка")
     print("  /exit                — завершить и сохранить состояние")
     print()
@@ -775,7 +905,9 @@ def main():
 
     # Идентификация: --user либо интерактивный ввод ДО загрузки памяти.
     user_id = args.user
-    agent = build_agent(user_id=user_id, mock=args.mock, mcp_enabled=args.mcp)
+    agent = build_agent(user_id=user_id, mock=args.mock, mcp_enabled=args.mcp,
+                        scheduler_enabled=args.scheduler,
+                        scheduler_interval=args.scheduler_interval)
 
     # Накопительный трекер токенов сессии (локальная оценка).
     exchange_tracker = {"n": 0, "tokens": 0, "cost": 0.0}
@@ -818,9 +950,16 @@ def main():
               f"(необязательные блоки опускаются)")
     if args.mock:
         print("[Режим] MockClient (заглушка) — живых запросов к API не будет.")
+
+    # Планировщик 24/7 (День 18): поднимаем ПОСЛЕ идентификации пользователя.
+    if args.scheduler:
+        setup_scheduler(agent, user_id, args.scheduler_interval)
+    else:
+        print("[Планировщик] Фон выключен (запустите с флагом --scheduler для 24/7).")
+
     print("Команды: /memory /profile [list|show|use|new|route|auto] /tasks /task [retry] "
           "/plan /approve /goto /transitions /step /run /pause /resume /deliver /compare "
-          "/summary /state /tokens /cost /help /exit\n")
+          "/summary /state /tokens /cost /mcp summary|jobs|pipeline|route /help /exit\n")
 
     # Главный цикл.
     while True:
@@ -955,6 +1094,7 @@ def main():
                     handle_mcp_command(agent, user_input)
                     continue
                 if command == "/exit":
+                    stop_scheduler(agent)
                     agent.save_state()
                     print("[Выход] Состояние сохранено. До встречи!")
                     break
@@ -980,10 +1120,12 @@ def main():
             print(f"Агент: {answer}\n")
 
         except EOFError:
+            stop_scheduler(agent)
             agent.save_state()
             print("\n[Выход] Ввод завершён (EOF)")
             break
         except KeyboardInterrupt:
+            stop_scheduler(agent)
             agent.save_state()
             print("\n[Выход] Прервано пользователем")
             break
