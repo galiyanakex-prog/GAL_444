@@ -15,4 +15,5 @@ check_models.py
 .mp4
 
 
-
+# SSH
+.ssh
