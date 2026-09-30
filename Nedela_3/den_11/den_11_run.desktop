@@ -1,9 +1,0 @@
-[Desktop Entry]
-Type=Application
-Name=Den 11 — Модель памяти агента
-Comment=Запуск агента с явной моделью памяти (memory layers)
-Exec=/home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/Nedela_3/den_11/den_11_run.sh
-Path=/home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/Nedela_3/den_11
-Terminal=true
-Encoding=UTF-8
-Categories=Utility;Development;
