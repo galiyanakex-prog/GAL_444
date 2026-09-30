@@ -3,7 +3,8 @@
 ENV
 
 # Python
-
+__pycache__/
+*.pyc
 
 
 # Временные файлы
@@ -17,3 +18,5 @@ check_models.py
 
 # SSH
 .ssh
+
+
