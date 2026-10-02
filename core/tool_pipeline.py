@@ -58,9 +58,10 @@ def run_pipeline(pipeline: Pipeline, executor, *, user_id: str = "", task: str =
                  task_stage: str = "", constraints=None) -> PipelineRun:
     """Выполнить цепочку автоматически, передавая данные между шагами.
 
-    Результат шага N (`ToolExecutionResult.summary`) подставляется в аргумент
-    `input_key` шага N+1. Каждый вызов идёт через `ToolExecutor` (policy + аудит).
-    Пайплайн останавливается на первом неуспешном обязательном шаге.
+    Результат шага N (ПОЛНЫЙ `ToolExecutionResult.text`, D6) подставляется в
+    аргумент `input_key` шага N+1 — без усечения до 500 символов. Каждый вызов
+    идёт через `ToolExecutor` (policy + аудит). Пайплайн останавливается на первом
+    неуспешном обязательном шаге.
     """
     run = PipelineRun(name=pipeline.name, ok=True)
     previous = ""
@@ -72,12 +73,13 @@ def run_pipeline(pipeline: Pipeline, executor, *, user_id: str = "", task: str =
                                   call_id=f"{pipeline.name}-step{index}")
         result = executor.execute(request, user_id=user_id, task=task,
                                   task_stage=task_stage, constraints=constraints)
+        full_text = getattr(result, "text", "") or result.summary or ""
         entry = {"tool": step.tool, "status": result.status,
                  "summary": result.summary, "arguments": arguments}
         run.steps.append(entry)
         if result.status == ToolExecutionState.SUCCEEDED.value:
-            previous = result.summary or ""
-            run.output = previous
+            previous = full_text
+            run.output = full_text
         else:
             run.ok = False
             if not step.optional:

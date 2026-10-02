@@ -106,6 +106,11 @@ parser.add_argument("--mcp", action="store_true",
 parser.add_argument("--mcp-probe", action="store_true",
                     help="One-shot: подключиться к MCP, вывести список инструментов "
                          "и выйти (результат задания Дня 16).")
+parser.add_argument("--mcp-probe-server", type=str, default=None,
+                    help="С --mcp-probe: строгая проверка одного сервера по id "
+                         "(например time).")
+parser.add_argument("--no-tools-block", action="store_true",
+                    help="С --mcp: не добавлять слой tools в промт (диагностика D2).")
 parser.add_argument("--scheduler", action="store_true",
                     help="Поднять фоновый планировщик (24/7): периодический сбор данных "
                          "и регулярная сводка в JSON (задание Дня 18).")
@@ -275,15 +280,24 @@ def stop_scheduler(agent: Agent):
 
 
 # 8.1 One-shot результат задания Дня 16: --mcp-probe ------------------------------
-def run_mcp_probe() -> int:
+def run_mcp_probe(only_server: str | None = None) -> int:
     """Подключиться к MCP → вывести список инструментов → корректно закрыться.
 
-    Не входит в REPL; недоступный сервер → понятная ошибка, exit 1.
+    Не входит в REPL. D1 (Ревизия 5): успех = **≥1 READY-сервер и непустой
+    список инструментов** (а не `overall == "ready"`). Частичная готовность
+    (`degraded`) больше не блокирует приёмку: сервер задания может быть жив,
+    пока другие недоступны. `only_server` — строгая проверка одного сервера.
     """
     from integrations.mcp.config import load_servers_config
     from integrations.mcp.gateway import MCPGatewaySync
 
     servers = load_servers_config(None)
+    if only_server is not None:
+        servers = [s for s in servers if s.server_id == only_server]
+        if not servers:
+            print(f"[MCP] Сервер «{only_server}» не найден в конфиге.",
+                  file=sys.stderr)
+            return 1
     gateway = MCPGatewaySync(servers)
     print(f"[MCP] Подключение к серверам: "
           f"{', '.join(s.server_id for s in servers)}")
@@ -294,16 +308,21 @@ def run_mcp_probe() -> int:
         return 1
 
     status = gateway.status()
-    if status["overall"] != "ready":
-        print(f"[MCP] Соединение не установлено (overall: {status['overall']})",
+    ready = [sid for sid, state in status["servers"].items() if state == "ready"]
+    if not ready:
+        print(f"[MCP] Ни один сервер не подключён (overall: {status['overall']})",
               file=sys.stderr)
         gateway.stop()
         return 1
 
-    print(f"[MCP] Соединение установлено (READY). Список доступных инструментов:")
+    print(f"[MCP] Соединение установлено (READY: {', '.join(ready)}; "
+          f"overall: {status['overall']}). Список доступных инструментов:")
     tools = gateway.discover()
     if not tools:
-        print("  (инструменты не обнаружены)")
+        print("[MCP] Инструменты не обнаружены — приёмка не пройдена.",
+              file=sys.stderr)
+        gateway.stop()
+        return 1
     for tool in tools:
         print(f"\n  {tool.name}")
         print(f"    description: {tool.description or '—'}")
@@ -390,16 +409,23 @@ def handle_mcp_command(agent: Agent, user_input: str):
         if agent.tool_registry is None:
             print("[Маршрут] Реестр не собран (нужен --mcp).\n")
             return
-        query = user_input.split(None, 2)[2].lower()
+        from core.tool_routing import rank_tools
+        query = user_input.split(None, 2)[2]
         snap = agent.tool_registry.snapshot()
         print(f"[Маршрут] Запрос: «{query}»; каталог v{snap.version}, "
               f"тулов: {len(snap.tools)}")
-        matched = [t for t in snap.tools
-                   if any(word in t.name.lower() or word in (t.description or "").lower()
-                          for word in query.split())]
-        for tool in (matched or snap.tools):
-            mark = "→" if tool in matched else " "
-            print(f"  {mark} {tool.name} [{tool.provider}] — {tool.description or '—'}")
+        matches = rank_tools(query, snap.tools)
+        if not matches:
+            print("[Маршрут] Совпадений нет — уточните запрос "
+                  "(доступно: /mcp tools).\n")
+            return
+        best = matches[0]
+        print(f"[Маршрут] Кандидат: {best.name} [{best.provider}] "
+              f"(оценка {best.score:g})")
+        print(f"          обоснование: {', '.join(best.reasons) or '—'}")
+        for alt in matches[1:]:
+            print(f"          альтернатива: {alt.name} [{alt.provider}] "
+                  f"(оценка {alt.score:g})")
         print()
         return
 
@@ -490,9 +516,14 @@ def handle_mcp_command(agent: Agent, user_input: str):
                 print(f"[MCP] Сервер «{target}» не найден. Сконфигурированы: {known}\n")
                 return
         try:
-            gateway.start()
-            print(f"[MCP] Подключение установлено: "
-                  f"{gateway.status()['overall'].upper()}\n")
+            # D6: с id — подключаем ТОЛЬКО целевой сервер (не весь каталог).
+            gateway.start(only_server=target)
+            if target is not None:
+                state = gateway.status().get("servers", {}).get(target, "?")
+                print(f"[MCP] Сервер «{target}»: {str(state).upper()}\n")
+            else:
+                print(f"[MCP] Подключение установлено: "
+                      f"{gateway.status()['overall'].upper()}\n")
         except Exception as error:
             print(f"[MCP] Подключение не удалось: {error} "
                   f"(память, профили и автомат продолжают работать)\n")
@@ -901,7 +932,7 @@ def check_demonstration(agent: Agent, user_input: str):
 def main():
     # One-shot результат задания Дня 16: подключиться → вывести список → выйти.
     if args.mcp_probe:
-        sys.exit(run_mcp_probe())
+        sys.exit(run_mcp_probe(args.mcp_probe_server))
 
     # Идентификация: --user либо интерактивный ввод ДО загрузки памяти.
     user_id = args.user
@@ -942,6 +973,11 @@ def main():
     # Применяем --deliver (набор слоёв по умолчанию).
     deliver = {part.strip() for part in args.deliver.split(",") if part.strip()}
     agent.deliver = deliver & set(DELIVERABLE)
+    # D2 (Ревизия 5): при --mcp слой `tools` не должен затираться дефолтным
+    # --deliver — иначе каталог не доезжает до модели. `--no-tools-block` —
+    # диагностический откат (проверить поведение без блока [tools]).
+    if args.mcp and not args.no_tools_block:
+        agent.deliver.add("tools")
     # Бюджет промта: None — обрезание выключено (поведение не меняется).
     agent.prompt_budget = args.budget
     print(f"[Режим] Доставка слоёв: {sorted(agent.deliver)}")

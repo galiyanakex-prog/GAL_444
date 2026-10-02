@@ -15,6 +15,7 @@
 """
 from dataclasses import asdict
 from datetime import datetime
+import json
 
 from memory.base import MemoryContext, MemoryItem
 from memory.manager import MemoryManager
@@ -696,13 +697,14 @@ class Agent:
         в память пишется лишь нормализованная запись (см. ToolExecutor/`external_actions`).
         """
         from core.tools import ToolCallRequest  # локальный импорт: без циклов модулей
-        from core.llm_client import TOOL_PROTOCOL_PROMPT
+        from core.llm_client import render_tool_protocol
 
         tools = list(prompt_ctx.tools)
         specs = self._tool_specs(tools)
         # Добавляем протокол инструментов в роль-инструкцию (fallback-путь).
+        # D2: протокол строится ОТ КАТАЛОГА (имена + обязательные аргументы).
         if not any("[tools]" in m.get("content", "") for m in messages):
-            messages = [{"role": "system", "content": TOOL_PROTOCOL_PROMPT}] + messages
+            messages = [{"role": "system", "content": render_tool_protocol(tools)}] + messages
         for _ in range(self.max_tool_iterations):
             reply = self.llm.complete_with_tools(messages, tools=specs) \
                 if hasattr(self.llm, "complete_with_tools") \
@@ -710,19 +712,36 @@ class Agent:
             if reply is None or not reply.tool_calls:
                 return (reply.content if reply else None) or ""
             for call in reply.tool_calls:
+                call_id = call.get("id", "") or f"call_{call['name']}"
                 request = ToolCallRequest(name=call["name"],
                                           arguments=call.get("arguments", {}),
-                                          call_id=call.get("id", ""))
+                                          call_id=call_id)
                 result = self.tool_executor.execute(
                     request, user_id=self.user_id, task=self.task,
                     task_stage=(self.task_state.stage.value if self.task_state else ""),
                     constraints=self.constraints)
                 self._record_external_action(result)
-                messages.append({"role": "assistant",
-                                 "content": f"tool_call: {call['name']}"})
+                # D6: канонический формат assistant-сообщения с валидным tool_calls
+                # (OpenAI-совместимо), а не текстовый «tool_call: …».
+                messages.append({
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [{
+                        "id": call_id,
+                        "type": "function",
+                        "function": {
+                            "name": call["name"],
+                            "arguments": json.dumps(call.get("arguments", {}),
+                                                    ensure_ascii=False),
+                        },
+                    }],
+                })
+                # D6: в контекст — ПОЛНЫЙ текст результата (не усечённый summary).
                 messages.append({"role": "tool", "name": call["name"],
-                                 "tool_call_id": call.get("id", ""),
-                                 "content": result.summary or f"status={result.status}"})
+                                 "tool_call_id": call_id,
+                                 "content": (getattr(result, "text", "")
+                                             or result.summary
+                                             or f"status={result.status}")})
         return "Достигнут лимит вызовов инструментов за один запрос."
 
     def _record_external_action(self, result) -> None:

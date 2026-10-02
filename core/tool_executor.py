@@ -89,7 +89,7 @@ class ToolExecutor:
         result = ToolExecutionResult(
             execution_id=execution_id, tool=descriptor.name, status=result.status,
             summary=result.summary, raw=result.raw, is_error=result.is_error,
-            call_id=request.call_id,
+            call_id=request.call_id, text=getattr(result, "text", "") or result.summary,
         )
         self._audit(user_id, task, self._record(result, request, started, "invoked"))
         self.log(f"[Инструменты] {descriptor.name}: {result.status}")

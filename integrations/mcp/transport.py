@@ -11,6 +11,7 @@ SDK 2.2.0: stdio — `mcp.client.stdio.stdio_client`; HTTP —
 from __future__ import annotations
 
 import asyncio
+import os
 from abc import ABC, abstractmethod
 
 
@@ -169,11 +170,25 @@ class _SessionTransport(MCPTransport):
         self._session = None
         self._streams = None
 
+    async def _with_timeout(self, coro, what: str):
+        """D5 (Ревизия 5): ограничить операцию `timeout_seconds`.
+
+        Зависший сервер не должен вешать постоянный event loop `MCPGatewaySync`:
+        по истечении лимита → `MCPConnectionError("таймаут …")`, состояние FAILED.
+        """
+        try:
+            return await asyncio.wait_for(coro, timeout=self._timeout)
+        except asyncio.TimeoutError as exc:
+            raise MCPConnectionError(
+                self._server_id, f"таймаут {what} ({self._timeout:g} с)") from exc
+
     async def list_tools(self) -> list[dict]:
         if self._session is None:
             raise MCPConnectionError(self._server_id, "initialize не выполнен")
         try:
-            result = await self._session.list_tools()
+            result = await self._with_timeout(self._session.list_tools(), "list_tools")
+        except MCPConnectionError:
+            raise
         except Exception as exc:
             raise MCPConnectionError(self._server_id, f"list_tools не удался: {exc}") from exc
         tools = getattr(result, "tools", None)
@@ -190,7 +205,10 @@ class _SessionTransport(MCPTransport):
         if self._session is None:
             raise MCPConnectionError(self._server_id, "initialize не выполнен")
         try:
-            result = await self._session.call_tool(name, arguments or {})
+            result = await self._with_timeout(
+                self._session.call_tool(name, arguments or {}), f"call_tool «{name}»")
+        except MCPConnectionError:
+            raise
         except Exception as exc:
             raise MCPConnectionError(self._server_id, f"call_tool «{name}» не удался: {exc}") from exc
         return _normalize_call_result(result)
@@ -239,10 +257,11 @@ class StdioMCPTransport(_SessionTransport):
         )
         try:
             self._streams = stdio_client(params)
-            read, write = await self._streams.__aenter__()
+            read, write = await self._with_timeout(
+                self._streams.__aenter__(), "stdio-подключение")
             self._session = ClientSession(read, write)
-            await self._session.__aenter__()
-            init = await self._session.initialize()
+            await self._with_timeout(self._session.__aenter__(), "stdio-сессия")
+            init = await self._with_timeout(self._session.initialize(), "initialize")
         except (Exception, asyncio.CancelledError) as exc:
             await self.close()
             raise MCPConnectionError(self._server_id, f"handshake не удался: {exc}") from exc
@@ -254,31 +273,64 @@ class HttpMCPTransport(_SessionTransport):
 
     Фактический API SDK — `mcp.client.streamable_http.streamable_http_client`
     (НЕ `streamablehttp_client` из v1) + `mcp.ClientSession`; ошибки → MCPConnectionError.
+
+    D7 (Ревизия 5): при наличии `headers`/`token_env` заголовки авторизации
+    передаются через `httpx2.AsyncClient(headers=...)` (SDK 2.2.0 принимает
+    готовый http_client). Секрет берётся из env (`token_env`), не из кода.
     """
 
     def __init__(self, server_id: str, endpoint: str,
-                 timeout_seconds: float = 30.0) -> None:
+                 timeout_seconds: float = 30.0,
+                 headers: dict[str, str] | None = None,
+                 token_env: str | None = None) -> None:
         super().__init__(server_id, timeout_seconds)
         self._endpoint = endpoint
+        self._headers = dict(headers or {})
+        self._token_env = token_env
+        self._http_client = None
+
+    def _auth_headers(self) -> dict[str, str]:
+        """Статические заголовки + Authorization: Bearer из env (если задан)."""
+        headers = dict(self._headers)
+        if self._token_env:
+            token = os.getenv(self._token_env)
+            if token:
+                headers.setdefault("Authorization", f"Bearer {token}")
+        return headers
 
     async def initialize(self) -> dict:
         try:
+            import httpx2
             from mcp import ClientSession
             from mcp.client.streamable_http import streamable_http_client
         except Exception as exc:  # SDK недоступен
             raise MCPConnectionError(self._server_id, f"SDK недоступен: {exc}") from exc
 
         try:
-            self._streams = streamable_http_client(self._endpoint)
-            streams = await self._streams.__aenter__()
+            headers = self._auth_headers()
+            if headers:
+                self._http_client = httpx2.AsyncClient(headers=headers)
+            self._streams = streamable_http_client(
+                self._endpoint, http_client=self._http_client)
+            streams = await self._with_timeout(
+                self._streams.__aenter__(), "HTTP-подключение")
             read, write = streams[0], streams[1]
             self._session = ClientSession(read, write)
-            await self._session.__aenter__()
-            init = await self._session.initialize()
+            await self._with_timeout(self._session.__aenter__(), "HTTP-сессия")
+            init = await self._with_timeout(self._session.initialize(), "initialize")
         except (Exception, asyncio.CancelledError) as exc:
             await self.close()
             raise MCPConnectionError(self._server_id, f"handshake не удался: {exc}") from exc
         return self._init_info(init)
+
+    async def close(self) -> None:
+        await super().close()
+        if self._http_client is not None:
+            try:
+                await self._http_client.aclose()
+            except BaseException:
+                pass
+            self._http_client = None
 
 
 def make_transport(server) -> MCPTransport:
@@ -291,7 +343,10 @@ def make_transport(server) -> MCPTransport:
         endpoint = getattr(server, "endpoint", None)
         if not endpoint:
             raise MCPConnectionError(server.server_id, "transport=http без endpoint")
-        return HttpMCPTransport(server.server_id, endpoint, server.timeout_seconds)
+        return HttpMCPTransport(
+            server.server_id, endpoint, server.timeout_seconds,
+            headers=getattr(server, "headers", None),
+            token_env=getattr(server, "token_env", None))
     command = getattr(server, "command", None) or (
         "python", "-m", "integrations.mcp.demo_server")
     return StdioMCPTransport(server.server_id, tuple(command), server.timeout_seconds)

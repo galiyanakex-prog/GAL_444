@@ -26,6 +26,22 @@ SCHEDULER_MCP_URL = os.getenv("SCHEDULER_MCP_URL", "http://127.0.0.1:8010/mcp")
 PIPELINE_MCP_URL = os.getenv("PIPELINE_MCP_URL", "http://127.0.0.1:8020/mcp")
 
 
+def _env_flag(name: str, default: bool = False) -> bool:
+    """Флаг из env: «1/true/yes/on» → True; «0/false/no/off/пусто» → False."""
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in ("1", "true", "yes", "on")
+
+
+# D1 (Ревизия 5): scheduler/pipeline по умолчанию ВЫКЛЮЧЕНЫ (enabled=False), но
+# остаются зарегистрированными в каталоге конфигов. Включаются env-флагами —
+# тогда probe/REPL поднимают их наравне с time/weather. Это убирает ложный
+# `degraded` на недоступных по умолчанию адресах, не меняя overall_state().
+SCHEDULER_MCP_ENABLED = _env_flag("SCHEDULER_MCP_ENABLED", False)
+PIPELINE_MCP_ENABLED = _env_flag("PIPELINE_MCP_ENABLED", False)
+
+
 @dataclass(frozen=True)
 class MCPServerConfig:
     """Конфиг одного MCP-сервера (изоляция прав через тулинг)."""
@@ -40,6 +56,11 @@ class MCPServerConfig:
     denied_tools: frozenset[str] = field(default_factory=frozenset)
     timeout_seconds: float = 30.0
     max_result_bytes: int = 65536
+    # D7 (Ревизия 5): авторизация HTTP-транспорта. `headers` — статические
+    # заголовки; `token_env` — имя env-переменной с токеном (→ Authorization:
+    # Bearer <token>). Секрет НЕ хранится в конфиге/коде — только в env.
+    headers: dict[str, str] = field(default_factory=dict)
+    token_env: str | None = None
 
 
 # Реальные серверы Дня 17 (Ревизия 3): основной — сервер задания `time`
@@ -64,14 +85,14 @@ DEFAULT_SERVERS: tuple[MCPServerConfig, ...] = (
         server_id="scheduler",
         transport="http",
         endpoint=SCHEDULER_MCP_URL,
-        enabled=True,
+        enabled=SCHEDULER_MCP_ENABLED,
         trust_level="low",
     ),
     MCPServerConfig(
         server_id="pipeline",
         transport="http",
         endpoint=PIPELINE_MCP_URL,
-        enabled=True,
+        enabled=PIPELINE_MCP_ENABLED,
         trust_level="low",
     ),
     MCPServerConfig(
@@ -99,6 +120,9 @@ def _parse_server(raw: dict) -> MCPServerConfig | None:
         command = None
     allowed = raw.get("allowed_tools") or []
     denied = raw.get("denied_tools") or []
+    headers = raw.get("headers") or {}
+    if not isinstance(headers, dict):
+        headers = {}
     return MCPServerConfig(
         server_id=raw["server_id"],
         transport=str(raw.get("transport", "stdio")),
@@ -110,6 +134,8 @@ def _parse_server(raw: dict) -> MCPServerConfig | None:
         denied_tools=frozenset(str(t) for t in denied),
         timeout_seconds=float(raw.get("timeout_seconds", 30.0)),
         max_result_bytes=int(raw.get("max_result_bytes", 65536)),
+        headers={str(k): str(v) for k, v in headers.items()},
+        token_env=(str(raw["token_env"]) if raw.get("token_env") else None),
     )
 
 

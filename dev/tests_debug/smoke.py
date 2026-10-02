@@ -234,7 +234,7 @@ def test_mcp_probe_subprocess():
     )
     out = proc.stdout + proc.stderr
     assert proc.returncode == 0, out
-    assert "[MCP] Соединение установлено (READY)" in out, out
+    assert "[MCP] Соединение установлено (READY" in out, out
     assert "mcp.demo.get_time" in out and "mcp.demo.echo" in out, out
     assert "mcp.demo.weather_stub" in out, out
     assert "Всего инструментов: 3" in out, out

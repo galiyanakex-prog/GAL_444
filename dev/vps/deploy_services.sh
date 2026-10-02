@@ -25,7 +25,8 @@ export DBUS_SESSION_BUS_ADDRESS="${DBUS_SESSION_BUS_ADDRESS:-unix:path=${XDG_RUN
 mkdir -p "$UNITS_DST"
 
 # 1) установка unit-файлов.
-while IFS=: read -r name port; do
+# `|| [ -n "$name" ]` — иначе последняя строка без завершающего \n теряется.
+while IFS=: read -r name port || [ -n "${name:-}" ]; do
   [ -n "${name:-}" ] || continue
   case "$name" in \#*) continue ;; esac
   src="$UNITS_SRC/$name.service"
@@ -39,7 +40,7 @@ systemctl --user daemon-reload
 
 # 3+4) включить, перезапустить, показать статус.
 echo "— статус —"
-while IFS=: read -r name port; do
+while IFS=: read -r name port || [ -n "${name:-}" ]; do
   [ -n "${name:-}" ] || continue
   case "$name" in \#*) continue ;; esac
   systemctl --user enable --now "$name.service" >/dev/null 2>&1 || true
@@ -47,4 +48,5 @@ while IFS=: read -r name port; do
   state="$(systemctl --user is-active "$name.service" 2>/dev/null || true)"
   printf '%-22s %-8s :%s\n' "$name" "${state:-unknown}" "$port"
 done < "$LIST"
+
 

@@ -208,7 +208,7 @@ mcp_gateway_mod.MCPGatewaySync = FakeSync
 sys.exit(Kod.run_mcp_probe())
 WEOF
   ACC_BASE='$KOD' '$PY' \"\$D/wrapper.py\" >\"\$D/out.txt\" 2>&1
-  grep -q 'Соединение установлено (READY)' \"\$D/out.txt\"
+  grep -q 'Соединение установлено (READY' \"\$D/out.txt\"
   grep -q 'Всего инструментов: 3' \"\$D/out.txt\"
   grep -q 'Соединение закрыто (DISCONNECTED)' \"\$D/out.txt\"
 "
@@ -398,6 +398,91 @@ a.deliver.add('tools')
 ans=a.respond('найди город Москва')
 assert 'Moscow' in ans, ans
 assert store.load_tool_audit('u',a.task)[0]['tool']=='mcp.weather.search_locations'
+print('ok')
+PYEOF
+"
+
+# 32 (День 20, D3): мультисерверный длинный флоу — Grep по детерминированному
+# сценарию (несколько серверов, порядок, без лишних) уже включён в L4 (check 6).
+check "мультисерверный флоу D3 (scenario L4)" grep -q "D3: мультисерверный длинный флоу" "$TST/scenario.py"
+
+# 33 (День 20, D4): ранжирование инструментов (rank_tools) — RU→EN-эвристика.
+check "ранжирование инструментов D4 (rank_tools)" bash -c "
+  '$PY' - <<'PYEOF'
+import sys
+sys.path.insert(0, '$KOD')
+from core.tool_routing import rank_tools
+from core.tools import ToolDescriptor
+tools=[ToolDescriptor(name='mcp.time.get_time',description='Текущее время',input_schema={'type':'object'},source='mcp',provider='time',original_name='get_time'),
+ToolDescriptor(name='mcp.pipeline.search',description='Получить данные',input_schema={'type':'object'},source='mcp',provider='pipeline',original_name='search'),
+ToolDescriptor(name='mcp.scheduler.schedule_reminder',description='Напоминание',input_schema={'type':'object'},source='mcp',provider='scheduler',original_name='schedule_reminder')]
+assert rank_tools('который час',tools)[0].name=='mcp.time.get_time'
+assert rank_tools('собери данные',tools)[0].name=='mcp.pipeline.search'
+assert rank_tools('напомни о сводке',tools)[0].name=='mcp.scheduler.schedule_reminder'
+assert rank_tools('абвгд непонятное',tools)==[]
+print('ok')
+PYEOF
+"
+
+# 34 (День 20, D6): пакет мелких исправлений — connect по id, полный text,
+# терминальные стадии read-only, валидный tool_calls.
+check "пакет исправлений D6 (connect/text/terminal/tool_calls)" bash -c "
+  '$PY' - <<'PYEOF'
+import sys, asyncio
+sys.path.insert(0, '$KOD')
+from integrations.mcp.config import MCPServerConfig
+from integrations.mcp.gateway import MCPGateway
+from integrations.mcp.transport import FakeMCPTransport
+from core.tools import ToolDescriptor, ToolCallRequest, ToolExecutionResult
+from core.tool_policy import ToolPolicy
+tools=[{'name':'get_time','description':'t','inputSchema':{'type':'object','properties':{},'required':[]}}]
+servers=[MCPServerConfig(server_id='time',transport='stdio',command='python',enabled=True),
+         MCPServerConfig(server_id='scheduler',transport='stdio',command='python',enabled=True)]
+tr={'time':FakeMCPTransport(tools,server_id='time'),'scheduler':FakeMCPTransport(tools,server_id='scheduler')}
+gw=MCPGateway(servers,tr); asyncio.run(gw.start(only_server='time'))
+st=gw.status()['servers']
+assert st['time']=='ready' and st['scheduler']=='disconnected', st
+long='x'*1200
+r=ToolExecutionResult(execution_id='1',tool='t',status='succeeded',summary=long[:500],text=long)
+assert len(r.summary)==500 and len(r.text)==1200
+pol=ToolPolicy()
+ro=ToolDescriptor(name='mcp.time.get_time',description='t',input_schema={'type':'object'},source='mcp',provider='time',original_name='get_time')
+mut=ToolDescriptor(name='mcp.pipeline.saveToFile',description='s',input_schema={'type':'object'},source='mcp',provider='pipeline',original_name='saveToFile')
+assert pol.check(ro,ToolCallRequest('mcp.time.get_time',{}),task_stage='done').allowed
+assert not pol.check(mut,ToolCallRequest('mcp.pipeline.saveToFile',{'name':'x','content':'y'}),task_stage='done').allowed
+print('ok')
+PYEOF
+"
+
+# 35 (День 20, D7): авторизация транспорта — заголовки из env + серверный 401.
+check "авторизация транспорта D7 (Bearer/401)" bash -c "
+  '$PY' - <<'PYEOF'
+import sys, os, asyncio
+sys.path.insert(0, '$KOD')
+from integrations.mcp.transport import HttpMCPTransport
+from integrations.mcp.config import _parse_server
+from integrations.mcp.auth import auth_middleware
+os.environ['TEST_MCP_TOKEN']='s3cr3t'
+tr=HttpMCPTransport('time','http://x/mcp',token_env='TEST_MCP_TOKEN',headers={'X-Trace':'1'})
+h=tr._auth_headers()
+assert h['Authorization']=='Bearer s3cr3t' and h['X-Trace']=='1', h
+os.environ.pop('TEST_MCP_TOKEN',None)
+cfg=_parse_server({'server_id':'s','transport':'http','endpoint':'http://x','token_env':'TOK','headers':{'X':'y'}})
+assert cfg.token_env=='TOK' and cfg.headers=={'X':'y'}
+os.environ['MCP_AUTH_TOKEN']='tok'
+async def inner(scope,receive,send):
+    await send({'type':'http.response.start','status':200,'headers':[]})
+    await send({'type':'http.response.body','body':b'ok'})
+app=auth_middleware(inner)
+def run(headers):
+    scope={'type':'http','method':'POST','path':'/mcp','headers':[(k.lower().encode(),v.encode()) for k,v in headers.items()]}
+    sent=[]
+    async def recv(): return {'type':'http.request','body':b'','more_body':False}
+    async def send(m): sent.append(m)
+    asyncio.run(app(scope,recv,send))
+    return next(m['status'] for m in sent if m['type']=='http.response.start')
+assert run({})==401 and run({'Authorization':'Bearer wrong'})==401 and run({'Authorization':'Bearer tok'})==200
+os.environ.pop('MCP_AUTH_TOKEN',None)
 print('ok')
 PYEOF
 "

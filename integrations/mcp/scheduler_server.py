@@ -200,6 +200,10 @@ except Exception:  # необязательная зависимость HTTP-р
 app = server.streamable_http_app(transport_security=transport_security) \
     if transport_security is not None else server.streamable_http_app()
 
+# D7 (Ревизия 5): если задан env MCP_AUTH_TOKEN — требовать Bearer-токен.
+from integrations.mcp.auth import auth_middleware
+app = auth_middleware(app)
+
 
 if __name__ == "__main__":
     import sys
@@ -208,3 +212,4 @@ if __name__ == "__main__":
     else:
         import uvicorn
         uvicorn.run(app, host="0.0.0.0", port=int(os.getenv("SCHEDULER_PORT", "8010")))
+

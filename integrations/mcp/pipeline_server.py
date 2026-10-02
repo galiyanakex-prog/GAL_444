@@ -148,6 +148,10 @@ except Exception:
 app = server.streamable_http_app(transport_security=transport_security) \
     if transport_security is not None else server.streamable_http_app()
 
+# D7 (Ревизия 5): если задан env MCP_AUTH_TOKEN — требовать Bearer-токен.
+from integrations.mcp.auth import auth_middleware
+app = auth_middleware(app)
+
 
 if __name__ == "__main__":
     import sys

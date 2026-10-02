@@ -604,6 +604,186 @@ def scenario_mcp_discovery(tmp):
     print("[scenario] MCP: деградация (FAILED не роняет REPL, каталог честен) OK")
 
 
+def scenario_multiserver_flow(tmp):
+    """13. D3 (День 20): длинный флоу с инструментами РАЗНЫХ MCP-серверов.
+
+    Программируемый многошаговый клиент (скрипт вызовов) прогоняет цепочку
+    time → pipeline(search) → pipeline(summarize) → pipeline(saveToFile) →
+    scheduler(schedule_reminder). Проверяем: выбор инструмента по имени,
+    МАРШРУТИЗАЦИЮ по `provider` (у каждого сервера — свой транспорт), строгий
+    ПОРЯДОК вызовов, отсутствие лишних вызовов, что `TaskStage` не изменился и
+    аудит содержит ровно N записей.
+    """
+    import integrations.mcp.gateway as mcp_gateway_mod
+    from integrations.mcp.config import MCPServerConfig
+    from integrations.mcp.transport import FakeMCPTransport
+    from integrations.mcp.provider import MCPToolProvider
+    from core.llm_client import LLMClient, LLMReply
+    from core.tool_registry import ToolRegistry
+    from core.tool_policy import ToolPolicy
+    from core.tool_executor import ToolExecutor
+    from core.invariants import RuleBasedChecker
+
+    # Серверы и их каталоги (квалифицированно: mcp.<server>.<tool>).
+    catalogs = {
+        "time": [{"name": "get_time", "description": "Текущее время",
+                  "inputSchema": {"type": "object", "properties":
+                                  {"timezone_name": {"type": "string"}},
+                                  "required": []}}],
+        "pipeline": [
+            {"name": "search", "description": "Получить данные (шаг 1)",
+             "inputSchema": {"type": "object",
+                             "properties": {"query": {"type": "string"}},
+                             "required": ["query"]}},
+            {"name": "summarize", "description": "Обработать данные (шаг 2)",
+             "inputSchema": {"type": "object",
+                             "properties": {"text": {"type": "string"}},
+                             "required": ["text"]}},
+            {"name": "saveToFile", "description": "Сохранить результат (шаг 3)",
+             "inputSchema": {"type": "object",
+                             "properties": {"name": {"type": "string"},
+                                            "content": {"type": "string"}},
+                             "required": ["name", "content"]}},
+        ],
+        "scheduler": [
+            {"name": "schedule_reminder", "description": "Напоминание",
+             "inputSchema": {"type": "object",
+                             "properties": {"text": {"type": "string"},
+                                            "delay_seconds": {"type": "number"}},
+                             "required": ["text"]}},
+        ],
+    }
+    results = {
+        "time": {"get_time": "2026-10-01T09:00:00+03:00"},
+        "pipeline": {
+            "search": "Python — язык.\nPython быстр.",
+            "summarize": "Сводка (2 предложений): Python — язык.; Python быстр.",
+            "saveToFile": '{"saved":"digest.txt","chars":52}',
+        },
+        "scheduler": {"schedule_reminder": '{"job_id":"j1","at":"+0s"}'},
+    }
+    # Запись порядка вызовов (server, tool) на общий список.
+    order: list[tuple[str, str]] = []
+    transports = {}
+    for sid in catalogs:
+        base = FakeMCPTransport(catalogs[sid], tool_results=results[sid], server_id=sid)
+
+        class _Recorder(type(base)):
+            def __init__(self, inner, sid, order):
+                self._inner, self._sid, self._order = inner, sid, order
+
+            async def initialize(self):
+                return await self._inner.initialize()
+
+            async def list_tools(self):
+                return await self._inner.list_tools()
+
+            async def call_tool(self, name, arguments):
+                self._order.append((self._sid, name))
+                return await self._inner.call_tool(name, arguments)
+
+            async def close(self):
+                return await self._inner.close()
+
+        transports[sid] = _Recorder(base, sid, order)
+
+    servers = [MCPServerConfig(server_id=sid, transport="stdio",
+                               command="python", enabled=True, trust_level="low")
+               for sid in catalogs]
+
+    class FakeSync(mcp_gateway_mod.MCPGatewaySync):
+        def __init__(self, srvs, trs):
+            self._gateway = mcp_gateway_mod.MCPGateway(srvs, trs)
+
+        def _run(self, coro):
+            return mcp_gateway_mod.asyncio.run(coro)
+
+    # Программируемый многошаговый клиент: выдаёт вызовы по сценарию (по имени из
+    # каталога), затем — финальный ответ. Имена берёт из фактически доступных tools.
+    class ScriptedClient(LLMClient):
+        def __init__(self):
+            self._step = 0
+            self.seen_tools: list[str] = []
+
+        def complete(self, messages, **params):
+            return "[scripted] финальный ответ"
+
+        def complete_with_tools(self, messages, tools=None, **params):
+            names = {t["function"]["name"] for t in (tools or [])}
+            self.seen_tools = sorted(names)
+            # Пока есть tool-результаты в истории — идём к финалу.
+            for m in messages:
+                if m.get("role") in ("tool", "function"):
+                    # продолжаем цепочку до конца скрипта
+                    break
+            script = [
+                ("mcp.time.get_time", {"timezone_name": "Europe/Moscow"}),
+                ("mcp.pipeline.search", {"query": "python"}),
+                ("mcp.pipeline.summarize", {"text": "Python — язык. Python быстр."}),
+                ("mcp.pipeline.saveToFile", {"name": "digest",
+                                             "content": "Сводка (2 предложений): Python — язык."}),
+                ("mcp.scheduler.schedule_reminder", {"text": "свежая сводка",
+                                                     "delay_seconds": 0}),
+            ]
+            if self._step < len(script):
+                name, args = script[self._step]
+                if name not in names:
+                    # Каталог не содержит запрошенный тул — не выдумываем вызов.
+                    return LLMReply(content=f"[scripted] тул {name} недоступен")
+                self._step += 1
+                return LLMReply(tool_calls=[{"id": f"call_{self._step}",
+                                             "name": name, "arguments": args}])
+            return LLMReply(content="[scripted] длинный флоу завершён: digest готов")
+
+    repo = ProfileRepository(os.path.join(tmp, "ms_profiles.db"))
+    store = Store(os.path.join(tmp, "ms_users"), profile_repo=repo)
+    memory = MemoryManager(default_layers(store))
+    client = ScriptedClient()
+    agent = Agent(client, memory, PromptBuilder("Ты ассистент"), store,
+                  user_id="ums", executor=StubExecutor())
+
+    gateway = FakeSync(servers, transports)
+    registry = ToolRegistry()
+    registry.add_provider(MCPToolProvider(gateway))
+    agent.mcp_gateway = gateway
+    agent.tool_registry = registry
+    gateway.start()
+    registry.refresh()
+    assert len(registry.snapshot().tools) == 5, "каталог: 1+3+1"
+    agent.tool_executor = ToolExecutor(registry, ToolPolicy(), gateway,
+                                       store=store, checker=RuleBasedChecker())
+    agent.deliver.add("tools")
+    # Длинный флоу: 5 вызовов + финал → лимит итераций выше дефолтных 5.
+    agent.max_tool_iterations = 8
+
+    agent.initialize_user("ums", "Ирина", {"style": "a", "constraints": "b",
+                                           "context": "c"})
+    agent.start_task("Собрать и сохранить сводку")
+    agent.step_task()  # new → planning
+    stage_before = agent.task_state.stage
+    answer = agent.respond("собери свежие данные, обработай, сохрани и напомни")
+
+    expected = [
+        ("time", "get_time"),
+        ("pipeline", "search"),
+        ("pipeline", "summarize"),
+        ("pipeline", "saveToFile"),
+        ("scheduler", "schedule_reminder"),
+    ]
+    assert order == expected, f"порядок вызовов неверен:\n факт={order}\n ожид={expected}"
+    assert "digest" in answer, answer
+    # Инструмент ≠ переход: стадия и журнал автомата не изменились.
+    assert agent.task_state.stage == stage_before
+    # Аудит: ровно N записей, маршрутизация по provider зафиксирована в tool-имени.
+    audit = store.load_tool_audit("ums", agent.task)
+    invoked = [r for r in audit if r.get("phase") == "invoked"]
+    assert len(invoked) == len(expected), f"аудит: {len(invoked)} != {len(expected)}"
+    providers = [r["tool"].split(".")[1] for r in invoked]
+    assert providers == ["time", "pipeline", "pipeline", "pipeline", "scheduler"], providers
+    print("[scenario] D3: мультисерверный длинный флоу "
+          "(5 вызовов, порядок, маршрутизация, аудит) OK")
+
+
 def main():
     os.makedirs(TMP_ROOT, exist_ok=True)
     tmp = tempfile.mkdtemp(prefix="scn_", dir=TMP_ROOT)
@@ -619,6 +799,7 @@ def main():
     scenario_mcp_discovery(tmp)
     scenario_llm_tool_use(tmp)
     scenario_tool_denied(tmp)
+    scenario_multiserver_flow(tmp)
     print("SCENARIO OK: exit 0")
     return 0
 

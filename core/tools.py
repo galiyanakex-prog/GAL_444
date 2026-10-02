@@ -27,6 +27,29 @@ ALL_WORKING_STAGES: frozenset[str] = frozenset(
     }
 )
 
+# Терминальные/неактивные стадии (D6): задача завершена/на паузе/с ошибкой —
+# мутирующие инструменты запрещены, разрешены только read-only.
+TERMINAL_STAGES: frozenset[str] = frozenset({"done", "failed", "paused"})
+
+# Эвристика read-only по имени инструмента (D6): глагол-префикс.
+_READ_ONLY_VERBS = ("get", "read", "list", "latest", "search", "find", "status",
+                    "show", "fetch", "query", "describe", "info")
+_MUTATING_VERBS = ("save", "schedule", "record", "run", "write", "create",
+                   "delete", "update", "set", "add", "remove", "summarize",
+                   "remind", "send", "post", "put", "publish")
+
+
+def infer_read_only(name: str) -> bool:
+    """Read-only ли инструмент (по короткому имени). Мутирующие глаголы — приоритет.
+
+    Эвристика для policy терминальных стадий (D6): `get_time`/`readFile`/`search`
+    → read-only; `saveToFile`/`schedule_reminder`/`summarize` → мутация.
+    """
+    short = (name or "").split(".")[-1].lower()
+    if any(short.startswith(v) for v in _MUTATING_VERBS):
+        return False
+    return any(short.startswith(v) for v in _READ_ONLY_VERBS)
+
 
 @dataclass(frozen=True)
 class ToolDescriptor:
@@ -58,6 +81,9 @@ class ToolCallRequest:
 class ToolExecutionResult:
     """Результат вызова инструмента.
 
+    `summary` — усечённый текст для логов/аудита (≤500 символов);
+    `text` — ПОЛНЫЙ текст результата (D6): нужен для передачи между шагами
+    пайплайна и для показа пользователю без потери данных;
     `raw` — сырой ответ: только текущий execution context, никогда в память.
     """
 
@@ -68,6 +94,7 @@ class ToolExecutionResult:
     raw: object | None = None
     is_error: bool = False
     call_id: str = ""
+    text: str = ""                  # полный текст (D6); пусто → равен summary
 
 
 class ToolExecutionState(str, Enum):

@@ -95,6 +95,32 @@ TOOL_PROTOCOL_PROMPT = (
 )
 
 
+def render_tool_protocol(tools) -> str:
+    """D2 (Ревизия 5): протокол инструментов, построенный ОТ КАТАЛОГА.
+
+    Перечисляет квалифицированные имена (`mcp.<server>.<tool>`) и обязательные
+    аргументы — чтобы fallback-путь не заставлял модель угадывать имена.
+    Пустой каталог → базовый `TOOL_PROTOCOL_PROMPT`.
+    """
+    tools = list(tools or [])
+    if not tools:
+        return TOOL_PROTOCOL_PROMPT
+    lines = [
+        "У тебя есть инструменты. Если для ответа нужен инструмент, верни СТРОГО "
+        'один JSON-объект вида {"tool": "<имя>", "arguments": {...}} и ничего больше.',
+        "Доступные инструменты (используй ТОЧНОЕ имя):",
+    ]
+    for tool in tools:
+        schema = getattr(tool, "input_schema", None) or {}
+        required = schema.get("required") or []
+        req = f"; обязательные аргументы: {', '.join(required)}" if required else ""
+        desc = getattr(tool, "description", "") or ""
+        first_line = desc.strip().splitlines()[0] if desc.strip() else "—"
+        lines.append(f"- {tool.name} — {first_line}{req}")
+    lines.append('Если инструмент не нужен — верни обычный текст или {"final": "<ответ>"}.')
+    return "\n".join(lines)
+
+
 class LLMClient(ABC):
     """Абстрактный LLM-клиент. Сигнатура `complete` неизменяема (контракт §6.1)."""
 

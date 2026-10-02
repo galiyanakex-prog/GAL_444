@@ -60,15 +60,19 @@ class MCPGateway:
 
     # -- жизненный цикл -------------------------------------------------------
 
-    async def start(self) -> None:
-        """Подключение ко всем включённым серверам (сбой одного — не падение).
+    async def start(self, only_server: str | None = None) -> None:
+        """Подключение к включённым серверам (сбой одного — не падение).
 
+        `only_server` (D6): подключить ТОЛЬКО указанный сервер (остальные не
+        трогаются) — `/mcp connect <id>` не должен поднимать весь каталог.
         Идемпотентно: уже READY-серверы не пересоздаются (повторный start не
         должен бросать старый HTTP/stdio-генератор в GC — иначе «cancel scope
         in a different task»).
         """
         for server in self._servers:
             if not server.enabled:
+                continue
+            if only_server is not None and server.server_id != only_server:
                 continue
             if (self._states.get(server.server_id) is MCPConnectionState.READY
                     and server.server_id in self._clients):
@@ -174,6 +178,7 @@ class MCPGateway:
             status=(ToolExecutionState.FAILED.value if is_error
                     else ToolExecutionState.SUCCEEDED.value),
             summary=text[:500],
+            text=text,
             raw=result.get("raw"),
             is_error=is_error,
         )
@@ -226,8 +231,8 @@ class MCPGatewaySync:
         self._loop.call_soon_threadsafe(self._queue.put_nowait, (coro, future))
         return future.result()
 
-    def start(self) -> None:
-        self._run(self._gateway.start())
+    def start(self, only_server: str | None = None) -> None:
+        self._run(self._gateway.start(only_server))
 
     def stop(self) -> None:
         self._run(self._gateway.stop())

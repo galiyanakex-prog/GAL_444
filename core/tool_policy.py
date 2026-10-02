@@ -17,6 +17,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from core.invariants import ConstraintSet, ProposedAction
+from core.tools import TERMINAL_STAGES, infer_read_only
 
 
 @dataclass
@@ -75,7 +76,15 @@ class ToolPolicy:
             return PolicyDecision(False, "аргументы не соответствуют схеме: "
                                    + "; ".join(errors))
 
-        if task_stage and task_stage not in (descriptor.allowed_stages or set()):
+        # D6: терминальные стадии (done/failed/paused) — только read-only.
+        # Проверяем ДО стадийного фильтра: read-only разрешён и на терминальной
+        # стадии (её нет в ALL_WORKING_STAGES), мутация — запрещена с внятной причиной.
+        if task_stage in TERMINAL_STAGES:
+            if not infer_read_only(descriptor.original_name):
+                return PolicyDecision(False,
+                    f"стадия «{task_stage}» терминальна: разрешены только read-only "
+                    f"инструменты, «{descriptor.name}» изменяет состояние")
+        elif task_stage and task_stage not in (descriptor.allowed_stages or set()):
             return PolicyDecision(False,
                 f"стадия «{task_stage}» не разрешает инструмент «{descriptor.name}»")
 
