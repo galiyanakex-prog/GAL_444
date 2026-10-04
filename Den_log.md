@@ -283,3 +283,4 @@
 [12:52:09] [Агент] M1: ответ получен (доставка: ['invariants', 'long_term', 'profile', 'short_term', 'working'])
 [12:52:09] [Память] working ← ['lifecycle_summary'] → /home/u/Документы/111111/Разное/Архив/АРХИВ_AI_9/Неделя_4/AI_9_57/Nedela_4/den_17/users/w17/tasks/Основная_задача/working_memory.json
 [12:52:09] [Память] remember(working) → working_memory.json ['lifecycle_summary']
+[01:23:49] [RAG] ingest: +0 ~1 -0 =8, чанков 110 за 17.886s

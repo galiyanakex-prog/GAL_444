@@ -355,3 +355,20 @@ class Store:
     def write_scheduler(self, user_id: str, name: str, data) -> str:
         """Пишет JSON планировщика (каталог scheduler создаётся). Возвращает путь."""
         return self.write_json(self.scheduler_path(user_id, name), data)
+
+    # --- RAG-модуль (День 21, Ревизия 6) ------------------------------------------
+    def rag_root(self) -> str:
+        """Глобальный корень RAG: <BASE_DIR>/rag (индекс вне users/, решение №3)."""
+        return os.path.join(os.path.dirname(self.root), "rag")
+
+    def rag_index_dir(self) -> str:
+        """Каталог артефактов индекса: <BASE_DIR>/rag/index."""
+        return os.path.join(self.rag_root(), "index")
+
+    def read_rag_config(self, default):
+        """Конфиг RAG (rag/config.json); отсутствующий/битый → default (не падает)."""
+        return self.read_json(os.path.join(self.rag_root(), "config.json"), default)
+
+    def write_rag_config(self, data) -> str:
+        """Пишет конфиг RAG (каталог rag создаётся). Возвращает путь."""
+        return self.write_json(os.path.join(self.rag_root(), "config.json"), data)

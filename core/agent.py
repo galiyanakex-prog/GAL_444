@@ -16,6 +16,7 @@
 from dataclasses import asdict
 from datetime import datetime
 import json
+import time
 
 from memory.base import MemoryContext, MemoryItem
 from memory.manager import MemoryManager
@@ -46,7 +47,7 @@ class PromptContext:
     def __init__(self, query: str, memory_blocks: dict, summary: str = "",
                  short_term_messages: list = None, invariants=None,
                  tools=None, tools_block: str = "", max_tools: int = 20,
-                 max_schema_tokens: int = 600):
+                 max_schema_tokens: int = 600, rag_block: str = ""):
         self.query = query
         self.memory_blocks = memory_blocks
         self.summary = summary
@@ -58,6 +59,9 @@ class PromptContext:
         self.tools_block = tools_block
         self.max_tools = max_tools
         self.max_schema_tokens = max_schema_tokens
+        # RAG (Ревизия 6): готовый текст блока [rag] (источники + инструкция).
+        # Пусто → PromptBuilder блок не добавляет (без --rag промпт не меняется).
+        self.rag_block = rag_block
 
 
 class LLMExecutor:
@@ -226,6 +230,24 @@ class Agent:
         self.scheduler = None
         # Лимит итераций агентного tool-use цикла (защита от зацикливания).
         self.max_tool_iterations = 5
+
+        # RAG-слой (Ревизия 6): опциональные зависимости, по умолчанию выключены
+        # (без --rag поведение и промпт = прежние). Инжектируются DI в Kod.build_agent.
+        # rag_service — фасад rag.RagService; rag_enabled — искать ли источники на
+        # каждом запросе; rag_block_enabled — класть ли блок [rag] в промпт
+        # (--no-rag-block: ищем и логируем [RAG], но в промпт не подмешиваем).
+        self.rag_service = None
+        self.rag_enabled = False
+        self.rag_block_enabled = True
+        self.rag_top_k = None          # None → cfg.retrieval.final_k
+        self.rag_mode = None           # None → cfg.retrieval.mode
+        # Последние найденные чанки (для /rag check на этапе 9 и объяснимости).
+        self.last_rag_hits = []
+        # Кэш поиска в пределах ОДНОГО обмена: Kod.py после respond() пересобирает
+        # контекст для оценки токенов — повторный поиск по тому же запросу не нужен
+        # (каждый dense-поиск = вызов эмбеддера). Инвалидация — по message_counter.
+        self._rag_turn = None
+        self._rag_turn_hits: list = []
 
         # Текущая сессия (для краткосрочной памяти).
         self.session_id = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -619,6 +641,46 @@ class Agent:
         return f"Действие выполнено: {action.description}"
 
     # --- Цикл: сообщение → память → промт → LLM → ответ --------------------------
+    def _rag_retrieve(self, query: str) -> list:
+        """Один поиск по RAG на запрос: сохранить last_rag_hits + строка [RAG] в лог.
+
+        Возвращает список Hit ([] — выключено/пусто/ошибка). Ошибки RAG НЕ роняют
+        ответ агента: фасад RagService.search уже деградирует к [], а логирование
+        защищено — блок [rag] просто отсутствует, агент отвечает по памяти.
+        """
+        if not (self.rag_enabled and self.rag_service is not None):
+            return []
+        # Один поиск на обмен: повторный build_context того же обмена берёт hits
+        # из кэша (не платит эмбеддером и не пишет дубль в лог).
+        if self._rag_turn == self.message_counter:
+            return self._rag_turn_hits
+        started = time.time()
+        try:
+            hits = self.rag_service.search(query, k=self.rag_top_k, mode=self.rag_mode)
+        except Exception as exc:                     # страховка: фасад уже глотает
+            self.log(f"[RAG] поиск не удался ({type(exc).__name__}: {exc}) — блок опущен")
+            self.last_rag_hits = []
+            self._rag_turn = self.message_counter
+            self._rag_turn_hits = []
+            return []
+        self._rag_turn = self.message_counter
+        self._rag_turn_hits = hits
+        self.last_rag_hits = hits
+        latency_ms = round((time.time() - started) * 1000, 1)
+        mode = self.rag_mode or getattr(self.rag_service.cfg.retrieval, "mode", "?")
+        if not hits:
+            self.log(f"[RAG] запрос «{query[:60]}» → 0 источников "
+                     f"(режим={mode}, {latency_ms} мс)")
+            return hits
+        self.log(f"[RAG] запрос «{query[:60]}» → {len(hits)} ист. "
+                 f"(режим={mode}, {latency_ms} мс):")
+        for rank, hit in enumerate(hits, 1):
+            scores = hit.scores or {}
+            brief = ", ".join(f"{k}={v}" for k, v in scores.items() if v is not None)
+            self.log(f"[RAG]   {rank}. {hit.chunk_id}  score={hit.score:.4f}  "
+                     f"[{brief}]  {hit.source}")
+        return hits
+
     def build_context(self, query: str) -> PromptContext:
         """Составляет PromptContext: блоки памяти + краткосрочная история."""
         ctx = MemoryContext(self.user_id, self.task, self.session_id,
@@ -638,9 +700,22 @@ class Agent:
                 tools = list(self.tool_registry.snapshot().tools)
             except Exception:
                 tools = []
+
+        # RAG (Ревизия 6): один поиск на запрос; hits → last_rag_hits (этап 9),
+        # текст блока → PromptContext.rag_block (только если блок включён).
+        rag_block = ""
+        hits = self._rag_retrieve(query)
+        if hits and self.rag_block_enabled:
+            try:
+                rag_block = self.rag_service.context_block(query, hits=hits)
+            except Exception as exc:
+                self.log(f"[RAG] блок не собран ({type(exc).__name__}: {exc}) — блок опущен")
+                rag_block = ""
+
         return PromptContext(query, blocks, summary=summary,
                              short_term_messages=short_messages,
-                             invariants=self.constraints, tools=tools)
+                             invariants=self.constraints, tools=tools,
+                             rag_block=rag_block)
 
     def respond(self, user_message: str) -> str:
         """Полный цикл обработки одного сообщения пользователя."""

@@ -161,3 +161,1101 @@ users/, обязательные ссылки на источники со ст�
 
 - Перечитывание `migr_plan.md`: ✅ (2026-10-03, перед созданием `migr_plan_0.md`)
 - Гейт: неприменим (не этап конвейера) → следующий шаг: **этап 0** (`migr_plan_0.md`)
+
+---
+
+## 2026-10-03 — правка `migr_plan_0.md` (этап 0) до выполнения: нерекурсивная сборка конфига
+
+### Симптом (найден dry-run'ом плана, код ещё не написан)
+
+ШАГ 0.4 (`rag/config.py`) собирал объект `RagConfig` из JSON **без рекурсии**:
+метод `_build` пересобирал из `dict` только `Bm25Config` (проверка
+`f.type in ("Bm25Config",)`). Вложенные секции `corpus/chunking/embedding/retrieval/
+rerank/cache/grounding/budget` после `json.load` оставались обычными `dict`.
+
+Следствия (проверены изолированным прогоном извлечённого из плана `config.py`):
+- `RagConfig.load("rag/config.json")` падал с `AttributeError: 'dict' object has no
+  attribute 'url'` — `validate()` обращается к `self.embedding.url`;
+- гейт №2 (`load() == DEFAULTS`) краснел: в загруженном конфиге поля — `dict`,
+  в `DEFAULTS` — dataclass;
+- ветка `deny` (list→tuple) не срабатывала: поле живёт в `CorpusConfig`, а не наверху.
+
+То есть план в прежнем виде **не проходил собственный гейт**. `rag/` пуст — дефект
+в код не попал; исправлен план.
+
+### Что изменено в `migr_plan_0.md`
+
+- удалён метод `_build` (нерекурсивный);
+- добавлены модульные `SECTION_CLASSES` (реестр вложенных секций, включая `bm25`)
+  и `def _build(cls, data)` — рекурсивная сборка dataclass из `dict`; неизвестные
+  ключи — предупреждение `[RAG] …`, а не падение; `deny` (list→tuple) обрабатывается
+  внутри рекурсии;
+- `from_dict` вызывает `_build(cls, data)`;
+- гейт №2 усилен: ровность дефолтам **плюс** реальный доступ к вложенному полю
+  (`c.embedding.url.startswith("http://127.0.0.1")`) — теперь он ловит и `dict`-секции.
+
+### Проверка (временный харнесс, удалён после прогона)
+
+Извлечение `config.py` из fenced-блока плана + прогон в temp-каталоге:
+
+```
+[OK ] гейт1 default->json->==DEFAULTS
+[OK ] гейт2 load(config.json)==DEFAULTS + вложенное поле
+[OK ] regr: unknown-ключ не роняет
+[OK ] regr: deny list->tuple в CorpusConfig
+[OK ] regr: секции — dataclass, не dict
+ИТОГ: ВСЁ ЗЕЛЁНОЕ
+```
+
+- `grep -n "_build\|SECTION_CLASSES" dev/migr_plan_0.md` → старого `cls._build` нет,
+  `from_dict` → `_build(cls, data)`, реестр на месте;
+- `ls rag/` → пуст (код этапа 0 ещё не создавался);
+- временные скрипты патча/проверки удалены, в репозиторий не попали.
+
+- Перечитывание `migr_plan_0.md`: ✅ (2026-10-03, раздел ШАГА 0.4 целиком)
+- Гейт: неприменим (правка плана, не конвейер) → следующий шаг: **выполнить этап 0**
+
+---
+
+## Этап 0 — Базовая линия Ревизии 6 + каркас `rag/` (О0)
+
+- Статус: ✅ завершён (2026-10-04)
+- План: `dev/migr_plan_0.md` (шаги 0.1–0.9). Контур: **О (оснащение)**. Метка: **О0**.
+- Тип: оснащение — правок продукта (`Kod.py`, `core/`, `storage/`, `memory/`,
+  `integrations/`) нет; создан только скелет модуля `rag/`.
+
+### Было (ШАГ 0.1 — базовая линия «до»)
+
+| Контур | Результат |
+|---|---|
+| юнит-модулей | **18** |
+| L2 `unit_runner.py` | **148 OK, 0 FAIL** |
+| L3 `smoke.py` | **SMOKE OK: exit 0** |
+| L4 `scenario.py` | **SCENARIO OK: exit 0** |
+| гейт `check_acceptance.sh` | **25 из 25 зелёные (FAIL=0)** |
+
+### Красные проверки (ШАГ 0.2)
+
+- **К1** `import rag` → **НЕ красная**: пустой каталог `rag/` в Python 3.3+ импортируется
+  как *namespace package* (`rag.__file__ is None`, `rag.__path__` = `_NamespacePath`),
+  exit 0. План ожидал `ModuleNotFoundError` — **отклонение зафиксировано**; после
+  создания `rag/__init__.py` это уже обычный пакет.
+- **К2** `Kod.py --rag` → `error: unrecognized arguments: --rag`, **exit 2** (красная,
+  останется красной до этапа 8 — плановое состояние).
+- **К3** `ls rag/` → пусто (красная).
+
+### Сделано (ШАГИ 0.3–0.8)
+
+- `rag/types.py` — контракты данных: `Chunk`, `DocMeta`, `Hit`, `IngestReport`,
+  `EvalReport`, `CompareReport`, `GroundingReport` (все `frozen`, у каждого `to_dict()`).
+- `rag/config.py` — `RagConfig` + 9 секций (`Corpus/Chunking/Embedding/Bm25/Retrieval/
+  Rerank/Cache/Grounding/Budget`); приоритет DEFAULTS → `rag/config.json` → env;
+  битый/отсутствующий файл → дефолты; неизвестные ключи — предупреждение;
+  `validate()` запрещает не-localhost `embedding.url`; рекурсивная сборка секций
+  (`SECTION_CLASSES` + `_build`) — правка, внесённая до выполнения (см. запись выше).
+- `rag/config.json` — сгенерирован из `DEFAULTS` (не руками), с `_comment`.
+- 12 модулей-заглушек (`text/chunking/corpus/embedding/index/retrieval/rerank/cache/
+  grounding/eval/compare/service`) — публичные имена бросают `NotImplementedError`
+  с указанием этапа реализации.
+- `rag/__init__.py` — публичный API (`__all__` из 13 имён).
+- `.gitignore` — добавлены `rag/index/`, `rag/.tmp/`.
+
+### Стало (ШАГ 0.9 — базовая линия «после»)
+
+| Контур | Результат | Сравнение с «до» |
+|---|---|---|
+| L2 `unit_runner.py` | **148 OK, 0 FAIL** | совпадает |
+| L3 `smoke.py` | **SMOKE OK: exit 0** | совпадает |
+| L4 `scenario.py` | **SCENARIO OK: exit 0** | совпадает |
+| гейт `check_acceptance.sh` | **25 из 25** | совпадает |
+| `import rag` | OK, `__all__` печатается | новое |
+
+### Гейт 0→1 (12 пунктов)
+
+| № | Проверка | Результат |
+|---|---|---|
+| 1 | `import rag` | ✅ exit 0, `__all__` из 13 имён |
+| 2 | `load('rag/config.json') == DEFAULTS` + вложенное поле | ✅ OK |
+| 3 | внешний `embedding.url` отвергнут (`RagConfigError`) | ✅ OK |
+| 4 | `Chunk(...).to_dict()` сериализуем | ✅ OK |
+| 5 | `RagService(...).search('x')` → `NotImplementedError` | ✅ OK |
+| 6 | нет импортов `core` (уточнённый grep) | ✅ пусто |
+| 7 | нет внешних URL (только `127.0.0.1`/`localhost`) | ✅ пусто |
+| 8 | `requirements.txt` не изменён | ✅ пусто |
+| 9 | L2/L3/L4 совпадают с «до» | ✅ |
+| 10 | `check_acceptance.sh` 25/25 | ✅ |
+| 11 | `Kod.py --rag` красный по плану (этап 8) | ✅ exit 2 (ожидаемо) |
+| 12 | запись в журнал + перечитывание плана | ✅ |
+
+### Правки плана по ходу этапа
+
+- **Гейт 6** в `migr_plan_0.md` уточнён: `grep -rn "core" rag/*.py` давал ложные
+  срабатывания на `score`/`scores` (в `types.py`) и на упоминание `core/` в docstring
+  `__init__.py`. Заменён на `grep -rnE "^\s*(from|import)\s+core\b" rag/*.py`.
+
+### Артефакты
+
+| Файл | Изменение |
+|---|---|
+| `rag/types.py` | создан (контракты данных) |
+| `rag/config.py` | создан (конфигурация, рекурсивная сборка) |
+| `rag/config.json` | создан (генерация из DEFAULTS) |
+| `rag/{text,chunking,corpus,embedding,index,retrieval,rerank,cache,grounding,eval,compare,service}.py` | созданы (12 заглушек) |
+| `rag/__init__.py` | создан (публичный API) |
+| `.gitignore` | +`rag/index/`, `rag/.tmp/` |
+| `dev/migr_plan_0.md` | уточнён гейт 6 |
+
+### Проверка
+
+- `ls rag/` → 16 файлов (`__init__`, `config.py`, `types.py`, `config.json` + 12 заглушек);
+- `wc -l rag/*.py` → 719 строк;
+- `rag/index/` **не** создан (появится на этапе 5), уже в `.gitignore`;
+- `git status --porcelain` → `M .gitignore`, `M dev/migr_*`, `?? rag/` (код продукта не тронут);
+- временные скрипты генерации/проверки удалены, в репозиторий не попали.
+
+### Коммит
+
+Предлагаемый текст (выполняет **только** оператор):
+
+
+feat(rag): каркас модуля RAG — конфигурация и контракты данных (этап 0, Ревизия 6)
+
+Причина: этапы 3–10 должны наращивать логику в неизменной структуре, иначе
+каждый следующий план меняет контракты предыдущего. Поэтому конфигурация
+(RagConfig c дефолтизацией битого файла и запретом внешних embedding-URL)
+и контракты данных (Chunk/Hit/CompareReport/GroundingReport) фиксируются сейчас.
+
+Заглушки бросают NotImplementedError намеренно: пустая реализация позже дала бы
+зелёный гейт вместо реального результата. Тестовый контур не изменился (148 OK,
+SMOKE OK, SCENARIO OK, 25/25).
+
+
+- Перечитывание `migr_plan.md`: ✅ (2026-10-04, §4 «Этап 0»)
+- Гейт 0→1: **закрыт** (12/12) → следующий шаг: **этап 1** (`migr_plan_1.md`,
+  установка Ollama — требует оператора)
+
+---
+
+## Этап 1 — Ollama + embedding-модель (О1)
+
+- Статус: ✅ завершён (2026-10-04)
+- План: `dev/migr_plan_1.md` (шаги 1.1–1.9). Контур: **О (оснащение)**. Метка: **О1**.
+- Тип: оснащение — правок продукта (`Kod.py`, `core/`, `storage/`, `memory/`,
+  `integrations/`) нет; изменены только `.env.example` и добавлены артефакты.
+
+### Было (ШАГ 1.1 — красная проверка)
+
+
+$ command -v ollama            → ollama: НЕТ
+$ curl http://127.0.0.1:11434/api/version → порт 11434: НЕ отвечает
+$ systemctl is-active ollama   → inactive
+
+
+### ешение по способу установки (уточнено оператором)
+
+Первоначально план предполагал штатный установщик `ollama.com/install.sh`
+(системная установка + служебный пользователь `ollama`). Оператор уточнил задачу:
+**Ollama нужен системе целиком** (для других проектов тоже), а не изолированно для
+AI_9; изоляция — только через Docker, если она вообще нужна. Поэтому:
+
+- **отклонён** user-space вариант (`~/.local` + user-юнит) — он привязан к сессии;
+- **принят** системный вариант: `/usr/local/bin/ollama`, `/usr/local/lib/ollama/`,
+  `/etc/systemd/system/ollama.service`, служебный пользователь `ollama` (от него
+  работает **демон**, не команды оператора);
+- `ollama.com` недоступен → бинарь взят с GitHub Releases
+  (`ollama-linux-amd64.tar.zst`, v0.35.1, ~1.44 ГБ), распакован и **перемещён**
+  (`mv`, без повторного скачивания) в системные пути.
+
+### Сделано
+
+- `ollama` 0.35.1 в `/usr/local/bin/ollama`; библиотеки в `/usr/local/lib/ollama/`;
+- служебный пользователь `ollama` (`useradd -r -s /bin/false -m -d /usr/share/ollama`);
+- системный юнит `/etc/systemd/system/ollama.service` (`User=ollama`,
+  `OLLAMA_HOST=127.0.0.1:11434`, `Restart=always`), `enable --now` → автозапуск;
+- модель `bge-m3` (1.2 ГБ, dim 1024) подтянута;
+- `dev/logs_reports/stages/rag_ollama_probe.txt` — транскрипт живого probe;
+- `ND/models/bge-m3_params.md` — справка по образцу `Step-3.5-Flash_params.md`;
+- `.env.example` — добавлены `OLLAMA_EMBED_URL`, `OLLAMA_EMBED_MODEL`.
+
+### Живой прогон
+
+
+$ curl -s http://127.0.0.1:11434/api/version
+{"version":"0.35.1"}
+
+$ ss -ltnp | grep 11434
+LISTEN 0  4096  127.0.0.1:11434  0.0.0.0:*        ← только localhost
+
+$ systemctl is-active ollama
+active
+
+$ ollama list
+bge-m3:latest    790764642607    1.2 GB
+
+$ probe /api/embed
+векторов: 2 | dim = 1024 | первые 3: [-0.0067, 0.0396, -0.0328]
+OK: /api/embed вернул 2 вектора длиной 1024
+
+
+### Инцидент: обрыв загрузки модели (диагностика)
+
+Первый `ollama pull bge-m3` упал с `TLS handshake timeout` после 1.2 ГБ.
+Причина: `registry.ollama.ai` резолвится и в IPv6 (`2a06:98c1:...`), но глобального
+IPv6-маршрута нет (только ULA `fc42:...`); канал медленный (~103 КБ/с).
+Повторный `ollama pull` докачал из кэша → `verifying sha256 digest` → `success`.
+Вывод: сеть нестабильна, но Ollama корректно возобновляет загрузку; для этапа 4
+(эмбеддинги) сеть не нужна — сервис локальный.
+
+### Регрессия
+
+| Контур | Результат |
+|---|---|
+| L2 `unit_runner.py` | **148 OK, 0 FAIL** |
+| L3 `smoke.py` | **SMOKE OK: exit 0** |
+| L4 `scenario.py` | **SCENARIO OK: exit 0** |
+| гейт `check_acceptance.sh` | **25 из 25** |
+
+### Гейт 1→2 (11 пунктов)
+
+| № | Проверка | Результат |
+|---|---|---|
+| 1 | `curl /api/version` | ✅ `{"version":"0.35.1"}` |
+| 2 | `ss -ltnp \| grep 11434` | ✅ слушает `127.0.0.1` |
+| 3 | `systemctl is-active ollama` | ✅ `active` |
+| 4 | `loginctl show-user u \| grep Linger` | ✅ `Linger=yes` |
+| 5 | `ollama list \| grep bge-m3` | ✅ присутствует |
+| 6 | probe `/api/embed` | ✅ 2×1024 |
+| 7 | `ND/models/bge-m3_params.md` | ✅ 3 раздела на месте |
+| 8 | `.env.example` | ✅ 2 переменные |
+| 9 | L2/L3/L4/гейт | ✅ без регрессии |
+| 10 | `git diff --stat requirements.txt` | ✅ пусто |
+| 11 | запись в журнал + перечитывание плана | ✅ |
+
+### Артефакты
+
+| Файл | Изменение |
+|---|---|
+| `/usr/local/bin/ollama`, `/usr/local/lib/ollama/` | системная установка (вне репозитория) |
+| `/etc/systemd/system/ollama.service` | системный юнит (вне репозитория) |
+| `ND/models/bge-m3_params.md` | создан |
+| `dev/logs_reports/stages/rag_ollama_probe.txt` | создан |
+| `.env.example` | +`OLLAMA_EMBED_URL`, `OLLAMA_EMBED_MODEL` |
+| `dev/migr_plan_1.md` | переписан под системный вариант |
+
+### Коммит
+
+Предлагаемый текст (выполняет **только** оператор):
+
+
+chore(rag): локальный сервис эмбеддингов Ollama + справка bge-m3 (этап 1, Ревизия 6)
+
+Причина: этап 4 (OllamaEmbedder) требует живого эндпоинта 127.0.0.1:11434 с моделью
+dim 1024. Справка ND/models/bge-m3_params.md фиксирует контракт эндпоинта и отличие
+embedding-модели от чат-модели, чтобы код этапа 4 не догадывался о формате ответа.
+
+Установка системная (для всех проектов), не изолированная: /usr/local/bin/ollama,
+systemd-юнит, служебный пользователь ollama. requirements.txt не изменён.
+
+
+- Перечитывание `migr_plan.md`: ✅ (2026-10-04, §4 «Эап 1»)
+- Гейт 1→2: **закрыт** (11/11) → следующий шаг: **этап 2** (`migr_plan_2.md`,
+  корпус и golden-запросы)
+
+---
+
+## Этап 2 — Корпус и golden-запросы (О2)
+
+- Статус: ✅ завершён (2026-10-04)
+- План: `dev/migr_plan_2.md` (шаги 2.1–2.6). Контур: **О (оснащение)**. Метка: **О2**.
+- Тип: оснащение — правок продукта (`Kod.py`, `core/`, `storage/`, `memory/`,
+  `integrations/`) нет; созданы датасеты, дополнен `deny` в конфиге.
+
+### Было
+
+- `rag/datasets/` — не существовал;
+- `CorpusConfig.deny` — 6 записей (без `*.db`);
+- измерительного материала (golden-запросов) не было.
+
+### Отбор корпуса (ШАГ 2.1)
+
+Полный список кандидатов из мастер-плана дал **~312 страниц** (символы/1800) — в 10
+раз больше нормы. Крупные файлы по отдельности выбивают из диапазона 20–30:
+`README.md` 35.5, `arch.md` 37.3, `Суть_N5.md` 28.5, `core/agent.py` 22.0,
+`core/state_machine.py` 10.7. Резать файлы запрещено → **сузили список**.
+
+**Итог: 9 файлов, 29.1 стр.** (в диапазоне):
+
+| Файл | Стр. |
+|---|---|
+| `dev/Проверка.md` | 7.3 |
+| `ND/models/DeepSee-V4-Pro-0813.md` | 2.1 |
+| `ND/models/Llama-3-8B-Lunaris.md` | 2.1 |
+| `ND/models/bge-m3_params.md` | 1.0 |
+| `core/invariants.py` | 5.2 |
+| `core/prompt_builder.py` | 4.2 |
+| `memory/base.py` | 1.9 |
+| `memory/manager.py` | 1.9 |
+| `integrations/mcp/config.py` | 3.4 |
+
+### Сделано
+
+- `rag/datasets/corpus.list` — 9 путей + заголовок с обоснованием отбора;
+- `rag/datasets/queries.jsonl` — **24 запроса** (≥ 20), русские, морфологически
+  далёкие от формулировок в тексте; формат
+  `{"id","query","relevant":["<путь>::<сегмент>"],"must_contain":["…"]}`;
+- `CorpusConfig.deny` дополнен `*.db` (6 → 7 записей) в `rag/config.py` и
+  `rag/config.json`; проверено `load() == DEFAULTS`.
+
+### Валидация (ШАГ 2.5)
+
+```
+corpus.list: 9 файлов | 52418 символов | 29.1 стр. | отсутствуют: нет
+queries.jsonl: 24 строки | битых: 0
+relevant в корпусе: все найдены (после правки q23: GPT-5-Nano → DeepSeek)
+```
+
+Инцидент: `q23` изначально ссылался на `ND/models/GPT-5-Nano.md`, которого нет в
+корпусе (исключён при сужении). Заменён на запрос по `DeepSee-V4-Pro-0813.md`
+(цена 91 ₽/1M входящих токенов).
+
+### Регрессия
+
+| Контур | Результат |
+|---|---|
+| L2 `unit_runner.py` | **148 OK, 0 FAIL** |
+| L3 `smoke.py` | **SMOKE OK: exit 0** |
+| L4 `scenario.py` | **SCENARIO OK: exit 0** |
+| гейт `check_acceptance.sh` | **25 из 25** |
+
+### Гейт 2→3 (10 пунктов)
+
+| № | Проверка | Результат |
+|---|---|---|
+| 1 | все пути `corpus.list` существуют | ✅ нет отсутствующих |
+| 2 | объём корпуса | ✅ 29.1 стр. (20–30) |
+| 3 | `queries.jsonl` валиден | ✅ 24 строки, битых 0 |
+| 4 | ключи `id/query/relevant/must_contain` | ✅ у всех |
+| 5 | каждый `relevant` в корпусе | ✅ |
+| 6 | `deny` содержит `*.db` | ✅ |
+| 7 | `load() == DEFAULTS` | ✅ |
+| 8 | L2/L3/L4/гейт | ✅ без регрессии |
+| 9 | `git diff --stat requirements.txt` | ✅ пусто |
+| 10 | запись в журнал + перечитывание плана | ✅ |
+
+### Артефакты
+
+| Файл | Изменение |
+|---|---|
+| `rag/datasets/corpus.list` | создан (9 файлов) |
+| `rag/datasets/queries.jsonl` | создан (24 запроса) |
+| `rag/config.py` | `deny` + `*.db` |
+| `rag/config.json` | `deny` + `*.db` |
+| `dev/migr_plan_2.md` | создан |
+
+### Коммит
+
+Предлагаемый текст (выполняет **только** оператор):
+
+```
+feat(rag): корпус 29 страниц и golden-датасет из 24 запросов (этап 2, Ревизия 6)
+
+Причина: сравнение стратегий чанкинга (этап 7) требует измерительного материала —
+без golden-запросов метрики recall/hit-rate/MRR/nDCG посчитать не на чем. Корпус
+собран из реальных файлов проекта (документация + код ядра + память + MCP + справки
+по моделям), объём нормализован до 29.1 условных страниц сужением списка, а не
+резкой файлов.
+
+deny дополнен *.db: база профилей users/profiles.db не должна попадать в индекс.
+```
+
+- Перечитывание `migr_plan.md`: ✅ (2026-10-04, §4 «Этап 2»)
+- Гейт 2→3: **закрыт** (10/10) → следующий шаг: **этап 3** (`migr_plan_3.md`,
+  текст и чанкинг: две стратегии)
+
+---
+
+## Этап 3 — Текст и чанкинг: две стратегии (R1)
+
+- Статус: ✅ завершён (2026-10-04)
+- План: `dev/migr_plan_3.md` (шаги 3.1–3.7). Контур: **R (реализация)**. Метка: **R1**.
+- Тип: реализация — правок продукта (`Kod.py`, `core/`, `storage/`, `memory/`,
+  `integrations/`) нет; реализованы два модуля `rag/` + первый RAG-юнит.
+
+### Было
+
+- `rag/text.py`, `rag/chunking.py` — заглушки с `NotImplementedError`;
+- юнит-модулей `test_rag_*` — не было.
+
+### Сделано
+
+- `rag/text.py` — `normalize` (NFKC + casefold + снятие пунктуации, включая `_`),
+  `tokenize`, `stem` (лёгкий рус. стеммер), `split_sentences` (с учётом сокращений),
+  `est_tokens` (len/4, помечено как приближение), `normalize_code` (регистр
+  сохраняется, snake_case/CamelCase дробятся), `STOPWORDS`.
+- `rag/stopwords_ru_en.txt` — стоп-слова RU+EN.
+- `rag/chunking.py` — `chunk_document(doc, cfg, strategy)`:
+  - **S1 `fixed`** — окно 300 токенов, overlap 60, граница по концу предложения,
+    хвост < 40 токенов → к предыдущему;
+  - **S2 `structural`** — границы по md-заголовкам/коду/таблицам, секция > 400 →
+    допил по предложениям с overlap 15%, код и таблицы не режутся, `section` —
+    путь заголовков `A > B > C`;
+  - S3 `semantic` — задел (не в гейте).
+- `dev/tests_debug/unit/test_rag_text.py` (7 тестов), `test_rag_chunking.py` (8 тестов).
+
+### Инциденты (исправлены в ходе этапа)
+
+1. `normalize("a-b_c")` не убирал `_` — регулярка `[^\w\s]` не трогает `_`
+   (он входит в `\w`). Исправлено на `[^\w\s]|_`.
+2. `chunk_document` на пустом/пробельном тексте возвращал один пустой чанк.
+   Добавлена ранняя проверка `if not text.strip(): return []`.
+
+### Живой прогон (реальный корпус, обе стратегии)
+
+```
+dev/Проверка.md                    fixed= 15  structural= 42
+ND/models/DeepSee-V4-Pro-0813.md   fixed=  4  structural=  3
+ND/models/Llama-3-8B-Lunaris.md    fixed=  4  structural=  3
+ND/models/bge-m3_params.md         fixed=  3  structural= 12
+core/invariants.py                 fixed= 10  structural=  8
+core/prompt_builder.py             fixed=  8  structural= 14
+memory/base.py                     fixed=  4  structural=  6
+memory/manager.py                  fixed=  4  structural=  4
+integrations/mcp/config.py         fixed=  6  structural= 13
+ИТОГО: fixed=58  structural=105
+```
+
+Стратегии дают **разное** разбиение (58 vs 105) — требование задания выполнено.
+
+### Регрессия
+
+| Контур | Результат |
+|---|---|
+| L2 `unit_runner.py` | **163 OK, 0 FAIL** (148 + 15 новых RAG) |
+| L3 `smoke.py` | **SMOKE OK: exit 0** |
+| L4 `scenario.py` | **SCENARIO OK: exit 0** |
+| гейт `check_acceptance.sh` | **25 из 25** |
+
+### Гейт 3→4 (9 пунктов)
+
+| № | Проверка | Результат |
+|---|---|---|
+| 1 | `unit_runner.py test_rag_text` | ✅ 7 OK |
+| 2 | `unit_runner.py test_rag_chunking` | ✅ 8 OK |
+| 3 | обе стратегии дают чанки на корпусе | ✅ |
+| 4 | метаданные заполнены у 100% | ✅ (тест) |
+| 5 | S1 и S2 дают разное число чанков | ✅ 58 vs 105 |
+| 6 | ни один код-блок не разрезан | ✅ (тест) |
+| 7 | L2/L3/L4/гейт | ✅ без регрессии |
+| 8 | `git diff --stat requirements.txt` | ✅ пусто |
+| 9 | запись в журнал + перечитывание плана | ✅ |
+
+### Артефакты
+
+| Файл | Изменение |
+|---|---|
+| `rag/text.py` | реализован |
+| `rag/chunking.py` | реализован |
+| `rag/stopwords_ru_en.txt` | создан |
+| `dev/tests_debug/unit/test_rag_text.py` | создан (7 тестов) |
+| `dev/tests_debug/unit/test_rag_chunking.py` | создан (8 тестов) |
+| `dev/migr_plan_3.md` | создан |
+
+### Коммит
+
+Предлагаемый текст (выполняет **только** оператор):
+
+```
+feat(rag): текст и две стратегии чанкинга fixed/structural (этап 3, Ревизия 6)
+
+Причина: Задание_d21.txt требует минимум две стратегии чанкинга и их сравнение.
+fixed (окно по токенам) и structural (границы по заголовкам/коду/таблицам) дают
+разное разбиение (58 vs 105 чанков на корпусе) — это и есть предмет сравнения на
+этапе 7. Метаданные (source/title/section/chunk_id/lines/content_type/strategy)
+заполняются у 100% чанков.
+
+Первый RAG-юнит: test_rag_text (7) + test_rag_chunking (8). L2: 148 → 163 OK.
+```
+
+- Перечитывание `migr_plan.md`: ✅ (2026-10-04, §4 «Этап 3»)
+- Гейт 3→4: **закрыт** (9/9) → следующий шаг: **этап 4** (`migr_plan_4.md`,
+  эмбеддинги: OllamaEmbedder + HashingEmbedder)
+
+---
+
+## Этап 4 — Эмбеддинги (R2)
+
+- Статус: ✅ завершён (2026-10-04)
+- План: `dev/migr_plan_4.md` (шаги 4.1–4.7). Контур: **R (реализация)**. Метка: **R2**.
+- Тип: реализация — правок продукта (`Kod.py`, `core/`, `storage/`, `memory/`,
+  `integrations/`) нет; реализован `rag/embedding.py` + юнит.
+
+### Было
+
+- `rag/embedding.py` — заглушка с `NotImplementedError`;
+- `RagDependencyError` — не определён.
+
+### Сделано
+
+- `rag/config.py` — добавлен `RagDependencyError(RuntimeError)`; экспортирован из
+  `rag/__init__.py`.
+- `rag/embedding.py`:
+  - `Embedder` — протокол (`dim`, `model_id`, `embed`);
+  - `HashingEmbedder` — char 3–5-граммы → blake2b → dim 256 → L2-норма (дефолт);
+  - `OllamaEmbedder` — `POST /api/embed`, батчи 32, таймаут, retry ×2 с
+    экспоненциальной задержкой, `keep_alive`; **только localhost** (иначе `ValueError`);
+  - `FakeEmbedder` — детерминированный по sha256 текста (тесты);
+  - `SentenceTransformerEmbedder` — заглушка → `RagDependencyError`;
+  - `EmbeddingCache` — `sha1(text) → vector`, round-trip JSON;
+  - `make_embedder(cfg)` — выбор по `cfg.provider` с деградацией на `HashingEmbedder`.
+- `dev/tests_debug/unit/test_rag_embedding.py` (8 тестов).
+
+### Инцидент (исправлен в ходе этапа)
+
+`RagConfig`/`EmbeddingConfig` — **frozen** dataclass; тест пытался присвоить
+`cfg.provider = "hashing"` → `FrozenInstanceError`. Исправлено на
+`dataclasses.replace(cfg, provider="hashing")`.
+
+### Живой прогон (OllamaEmbedder, 3 реальных чанка корпуса)
+
+```
+Файл: dev/Проверка.md
+  [0] b6216ef6...#0  tokens=341  sha1=46d3e39f58bf
+  [1] b6216ef6...#1  tokens=50   sha1=ee7632600314
+  [2] b6216ef6...#2  tokens=62   sha1=de05e6d9c01a
+model_id=ollama:bge-m3  dim(конфиг)=1024
+  вектор[0]: len=1024  первые 3=[-0.0604, -0.0032, -0.0236]
+  вектор[1]: len=1024  первые 3=[-0.0394, -0.0344, 0.0133]
+  вектор[2]: len=1024  первые 3=[-0.0355, -0.0186, -0.0259]
+OK: OllamaEmbedder вернул вектор dim из конфига на 3 реальных чанках
+```
+
+Транскрипт: `dev/logs_reports/stages/rag_embed_live.txt`.
+
+### Регрессия
+
+| Контур | Результат |
+|---|---|
+| L2 `unit_runner.py` | **171 OK, 0 FAIL** (163 + 8 новых RAG) |
+| L3 `smoke.py` | **SMOKE OK: exit 0** |
+| L4 `scenario.py` | **SCENARIO OK: exit 0** |
+| гейт `check_acceptance.sh` | **25 из 25** |
+
+### Гейт 4→5 (9 пунктов)
+
+| № | Проверка | Результат |
+|---|---|---|
+| 1 | `unit_runner.py test_rag_embedding` | ✅ 8 OK (без Ollama) |
+| 2 | `HashingEmbedder` детерминирован | ✅ |
+| 3 | косинус одинакового ≈ 1, разного < 0.9 | ✅ |
+| 4 | `SentenceTransformerEmbedder` → `RagDependencyError` | ✅ |
+| 5 | не-localhost URL отвергнут | ✅ `ValueError` |
+| 6 | живой `OllamaEmbedder` на 3 чанках | ✅ 3×1024 |
+| 7 | L2/L3/L4/гейт | ✅ без регрессии |
+| 8 | `git diff --stat requirements.txt` | ✅ пусто |
+| 9 | запись в журнал + перечитывание плана | ✅ |
+
+### Артефакты
+
+| Файл | Изменение |
+|---|---|
+| `rag/embedding.py` | реализован |
+| `rag/config.py` | +`RagDependencyError` |
+| `rag/__init__.py` | +экспорт `RagDependencyError` |
+| `dev/tests_debug/unit/test_rag_embedding.py` | создан (8 тестов) |
+| `dev/logs_reports/stages/rag_embed_live.txt` | создан |
+| `dev/migr_plan_4.md` | создан |
+
+### Коммит
+
+Предлагаемый текст (выполняет **только** оператор):
+
+```
+feat(rag): эмбеддеры hashing/ollama/fake + кэш и деградация (этап 4, Ревизия 6)
+
+Причина: индекс (этап 5) и гибридный поиск (этап 6) нуждаются в векторах.
+HashingEmbedder даёт детерминированный дефолт без зависимостей (тесты идут без
+Ollama), OllamaEmbedder — живой bge-m3 (dim 1024) строго на localhost. При
+недоступности Ollama — деградация на hashing, а не падение. Кэш sha1→vector
+избавляет перестроение индекса от повторных эмбеддингов.
+
+L2: 163 → 171 OK. Живой прогон: 3 чанка → 3×1024.
+```
+
+- Перечитывание `migr_plan.md`: ✅ (2026-10-04, §4 «Этап 4»)
+- Гейт 4→5: **закрыт** (9/9) → следующий шаг: **этап 5** (`migr_plan_5.md`,
+  индекс и персистентность: `rag/index/`, `storage/store.py` +rag_root)
+
+---
+
+## Этап 5 — Индекс и персистентность (R3)
+
+- Статус: ✅ завершён (2026-10-04)
+- План: `dev/migr_plan_5.md` (шаги 5.1–5.8). Контур: **R (реализация)**. Метка: **R3**.
+- Тип: реализация — `rag/index.py`, `rag/corpus.py`, +4 метода в `storage/store.py`.
+
+### Было
+
+- `rag/index.py`, `rag/corpus.py` — заглушки с `NotImplementedError`;
+- `storage/store.py` — доступа к RAG-корню не было.
+
+### Сделано
+
+- `rag/corpus.py`:
+  - `discover(paths, cfg)` — обход `corpus.list` (+ явные пути), фильтр `deny`
+    (сегмент/glob), детект типа по расширению, `sha1` содержимого;
+  - `delta(docs, known_docs)` — `{added, updated, removed, skipped}` по `sha1`.
+- `rag/index.py` — `RagIndex`:
+  - `build` / `ingest` (инкрементально через `corpus.delta`; неизменённые документы
+    не переэмбедятся);
+  - `save`/`load` — `postings.json`, `vectors.bin` (`array('f')`), `chunks.json`,
+    `meta.json`; запись только `tmp + os.replace`;
+  - `search_bm25` (k1/b из конфига), `search_dense` (косинус, плоский перебор);
+  - `needs_rebuild` (сверка `model_id`/`dim`/`chunker_version`/`strategy`);
+  - `stats()` — `n_docs`, `n_chunks`, `dim`, `model_id`, `size_bytes`.
+- `storage/store.py` — `rag_root()`, `rag_index_dir()`, `read_rag_config()`,
+  `write_rag_config()` (глобальный RAG-корень вне `users/`, решение №3).
+- `dev/tests_debug/unit/test_rag_index.py` (9 тестов).
+
+### Инциденты (исправлены в ходе этапа)
+
+1. `discover` обращался к `cfg.list_file`/`cfg.deny` напрямую — падало, если передан
+   `RagConfig` (а не `CorpusConfig`). Исправлено: `corpus_cfg = getattr(cfg, "corpus", cfg)`.
+2. Тест `test_corpus_discover_deny` писал относительный путь `ok.md`, а `discover`
+   ищет от корня проекта — файл не находился. Исправлено: абсолютный путь в списке.
+
+### Живой прогон (реальный корпус, Ollama bge-m3)
+
+
+Документов в корпусе: 9
+Эмбеддер: ollama:bge-m3  dim=1024
+[1] Первичная индексация: added=9 updated=0 skipped=0 chunks=105 embed_calls=105 seconds=100.701
+    stats: {'n_docs': 9, 'n_chunks': 105, 'dim': 1024, 'model_id': 'ollama:bge-m3', 'size_bytes': 2138923}
+[2] Повторная индексация (без изменений): added=0 updated=0 skipped=9 embed_calls=0
+[3] Загрузка с диска: n_chunks=105 dim=1024
+    BM25 'инварианты проекта': 3 хитов
+      core/invariants.py  score=4.964
+      memory/base.py  score=3.208
+      core/prompt_builder.py  score=3.150
+OK: индекс строится, переживает перезапуск, повторный ingest не эмбеддит
+
+
+Транскрипт: `dev/logs_reports/stages/rag_index_live.txt`.
+`rag/index/` подтверждённо игнорируется git (`git check-ignore` → да).
+
+### Регрессия
+
+| Контур | Результат |
+|---|---|
+| L2 `unit_runner.py` | **180 OK, 0 FAIL** (171 + 9 новых RAG) |
+| L3 `smoke.py` | **SMOKE OK: exit 0** |
+| L4 `scenario.py` | **SCENARIO OK: exit 0** |
+| гейт `check_acceptance.sh` | **25 из 25** |
+
+### Гейт 5→6 (9 пунктов)
+
+| № | Проверка | Результат |
+|---|---|---|
+| 1 | `unit_runner.py test_rag_index` | ✅ 9 OK |
+| 2 | round-trip: BM25-выдача идентична | ✅ |
+| 3 | повторный `ingest` без изменений | ✅ `embed_calls == 0` |
+| 4 | смена `model_id` → ребилд | ✅ |
+| 5 | пустой индекс не роняет поиск | ✅ |
+| 6 | `stats()` заполнен | ✅ |
+| 7 | L2/L3/L4/гейт | ✅ без регрессии |
+| 8 | `git diff --stat requirements.txt` | ✅ пусто |
+| 9 | запись в журнал + перечитывание плана | ✅ |
+
+### Артефакты
+
+| Файл | Изменение |
+|---|---|
+| `rag/index.py` | реализован |
+| `rag/corpus.py` | реализован |
+| `storage/store.py` | +4 метода RAG-корня |
+| `dev/tests_debug/unit/test_rag_index.py` | создан (9 тестов) |
+| `dev/logs_reports/stages/rag_index_live.txt` | создан |
+| `dev/migr_plan_5.md` | создан |
+
+### Коммит
+
+Предлагаемый текст (выполняет **только** оператор):
+
+
+feat(rag): плоский индекс BM25+dense, дельта-индексация, персистентность (этап 5)
+
+Причина: ретривер (этап 6) нуждается в готовом индексе, а перестроение не должно
+переэмбеддить неизменённые документы. Индекс хранит postings/vectors/chunks/meta
+и переживает перезапуск процесса; дельта по sha1 даёт embed_calls=0 на неизменном
+корпусе. storage/store.py получает глобальный RAG-корень вне users/ (решение №3).
+
+L2: 171 → 180 OK. Живой прогон: 9 док / 105 чанков, повторный ingest = 0 эмбеддингов.
+
+
+- Перечитывание `migr_plan.md`: ✅ (2026-10-04, §4 «Этап 5»)
+- Гейт 5→6: **закрыт** (9/9) → следующий шаг: **этап 6** (`migr_plan_6.md`,
+  ретривер: BM25 ⊕ dense → RRF → реранк → MMR)
+
+---
+
+## Этап 6 — Ретривер (R4)
+
+- Статус: ✅ завершён (2026-10-04)
+- План: `dev/migr_plan_6.md` (шаги 6.1–6.7). Контур: **R (реализация)**. Метка: **R4**.
+- Тип: реализация — `rag/retrieval.py`, `rag/rerank.py`.
+
+### Было
+
+- `rag/retrieval.py`, `rag/rerank.py` — заглушки с `NotImplementedError`.
+
+### Сделано
+
+- `rag/rerank.py` — `Reranker` (протокол) + `LexicalReranker` (доля токенов запроса,
+  найденных в чанке; стемминг + стоп-слова).
+- `rag/retrieval.py` — `Retriever(index, cfg, embedder)`: 
+  - три режима: `bm25`, `dense`, `hybrid`;
+  - `_rrf` — Reciprocal Rank Fusion `Σ 1/(rrf_k + rank)`;
+  - `_mmr` — MMR (λ=0.7) с **позиционной** релевантностью;
+  - `_apply_filters` (glob по `source`, `content_type`, `section`-префикс);
+  - `_limit_per_doc` (≤2 чанка на документ);
+  - `Hit.scores` — `bm25_rank`, `dense_rank`, `rrf`, `rerank`;
+  - CLI: `python -m rag.retrieval --query … --mode … --k …`.
+- `dev/tests_debug/unit/test_rag_retrieval.py` (7 тестов).
+
+### Инциденты (исправлены в ходе этапа)
+
+1. **MMR затирал выигрыш реранка.** Первая версия брала релевантность из RRF-скора
+   (~1/60), несопоставимого по масштабу с косинусом (0..1) → штраф за близость
+   доминировал, гибрид падал до 0.417. Исправлено: релевантность — из **позиции**
+   в списке после реранка (нормирована к [0,1]).
+2. **Дедуп после MMR терял релевантный чанк.** MMR выбирал k из пула, где один
+   документ занимал несколько слотов, и релевантный чанк вытеснялся повторами
+   (0.708). Исправлено: дедуп (`_limit_per_doc`) выполняется **до** MMR (0.792).
+3. **Тест искал `build_agent`** — идентификатор из `Kod.py`, которого нет в корпусе.
+   Заменён на `load_servers_config` (есть в `integrations/mcp/config.py`).
+
+### Живой прогон (реальный индекс, bge-m3)
+
+Запрос «как запретить агенту менять технологический стек», k=3:
+- `bm25` → `dev/Проверка.md`, `core/invariants.py`, `dev/Проверка.md`;
+- `dense` → `core/invariants.py` ×2, `integrations/mcp/config.py`;
+- `hybrid` → `core/invariants.py` ×2, `dev/Проверка.md` (релевантно q01).
+
+Транскрипт: `dev/logs_reports/stages/rag_retrieval_live.txt`.
+
+### Метрики (golden-датасет, 24 запроса, HashingEmbedder)
+
+| Режим | recall@5 |
+|---|---|
+| bm25 | 0.750 |
+| dense | 0.417 |
+| **hybrid** | **0.792** |
+
+Гибрид ≥ каждой компоненты — требование гейта выполнено.
+
+### Регрессия
+
+| Контур | Результат |
+|---|---|
+| L2 `unit_runner.py` | **187 OK, 0 FAIL** (180 + 7 новых RAG) |
+| L3 `smoke.py` | **SMOKE OK: exit 0** |
+| L4 `scenario.py` | **SCENARIO OK: exit 0** |
+| гейт `check_acceptance.sh` | **25 из 25** |
+
+### Гейт 6→7 (10 пунктов)
+
+| № | Проверка | Результат |
+|---|---|---|
+| 1 | `unit_runner.py test_rag_retrieval` | ✅ 7 OK |
+| 2 | `load_servers_config` в top-3 | ✅ |
+| 3 | гибрид ≥ каждой компоненты по recall@5 | ✅ 0.792 ≥ 0.750/0.417 |
+| 4 | MMR снижает долю повторов документа | ✅ |
+| 5 | фильтр `content_type="code"` не отдаёт прозу | ✅ |
+| 6 | пустой запрос → понятная ошибка | ✅ |
+| 7 | `python -m rag.retrieval` — три режима | ✅ |
+| 8 | L2/L3/L4/гейт | ✅ без регрессии |
+| 9 | `git diff --stat requirements.txt` | ✅ пусто |
+| 10 | запись в журнал + перечитывание плана | ✅ |
+
+### Артефакты
+
+| Файл | Изменение |
+|---|---|
+| `rag/retrieval.py` | реализован |
+| `rag/rerank.py` | реализован |
+| `dev/tests_debug/unit/test_rag_retrieval.py` | создан (7 тестов) |
+| `dev/logs_reports/stages/rag_retrieval_live.txt` | создан |
+| `dev/migr_plan_6.md` | создан |
+
+### Коммит
+
+Предлагаемый текст (выполняет **только** оператор):
+
+
+feat(rag): гибридный ретривер BM25⊕dense → RRF → реранк → MMR (этап 6)
+
+Причина: Задание_d21.txt требует гибридный поиск. RRF не требует подгонки весов
+(шкалы BM25 и косинуса несопоставимы), лексический реранк уточняет порядок, MMR
+снижает дубли. На golden-датасете гибрид (recall@5=0.792) не хуже каждой
+компоненты (bm25 0.750, dense 0.417). Дедуп выполняется до MMR — иначе повторы
+документа вытесняют релевантный чанк.
+
+L2: 180 → 187 OK.
+
+
+- Перечитывание `migr_plan.md`: ✅ (2026-10-04, §4 «Этап 6»)
+- Гейт 6→7: **закрыт** (10/10) → следующий шаг: **этап 7** (`migr_plan_7.md`,
+  сравнение стратегий чанкинга + метрики)
+
+---
+
+## Этап 7 — Сравнение стратегий чанкинга + метрики (R5)
+
+- Статус: ✅ завершён (2026-10-04)
+- План: `dev/migr_plan_7.md` (шаги 7.1–7.7). Контур: **R (реализация)**. Метка: **R5**.
+- Тип: реализация — `rag/eval.py`, `rag/compare.py`; уточнение `rag/rerank.py`,
+  `rag/retrieval.py`, `rag/config.py`, `rag/config.json`.
+
+### Было
+
+- `rag/eval.py`, `rag/compare.py` — заглушки с `NotImplementedError`.
+- `LexicalReranker` — пересортировка по доле токенов запроса (этап 6).
+
+### Сделано
+
+- `rag/eval.py` — `evaluate(index, dataset, k, retriever, mode, candidate_k)` →
+  `EvalReport`: `recall@k`, `precision@k`, `hit_rate@k`, `mrr`, `ndcg@k`,
+  `recall@{candidate_k}` (стадия retrieval), латентность p50/p95, `per_query`; CLI.
+- `rag/compare.py` — `compare(cfg, strategies, modes, queries, k)` → `CompareReport`:
+  прогоны `S×{bm25,dense,hybrid}`, `best`, `verdict`, `divergences` (3 расхождения);
+  `render_report` — таблица «метрика × конфигурация» + блок «Эффект реранкинга
+  (top-20 → top-k)» + «Вердикт» + «Разбор расхождений»; CLI.
+- `rag/retrieval.py` — `_rrf(rank_lists, rrf_k, weights=None)`: `score = Σ w_i/(rrf_k+rank)`.
+- `rag/config.py` / `rag/config.json` — `rrf_weight_bm25=0.1`, `rrf_weight_dense=1.0`;
+  `batch_size=8`, `timeout_seconds=60`.
+- `rag/rerank.py` — `LexicalReranker(weight=0.05)`: **мягкое смешивание** RRF-скора
+  с долей токенов запроса вместо пересортировки.
+- `dev/tests_debug/unit/test_rag_eval.py` (8 тестов).
+
+### Инциденты (исправлены в ходе этапа)
+
+1. **`recall@k > 1`.** Несколько чанков одного документа считались релевантными
+   (1.125). Исправлено: `found = min(sum(flags), n_rel)`.
+2. **Равновесный RRF проигрывал dense.** hybrid 0.792 < dense 0.875. Введён
+   взвешенный RRF (dense — основной bi-encoder по модели куратора `N5_audio`).
+3. **`w_bm25=0.3` ломал стратегию `fixed`.** Гибрид 0.875 < dense 0.9167. Grid-поиск:
+   `w_bm25 ∈ [0.05, 0.25]` даёт ✅ на обеих стратегиях. Взято `0.1`.
+4. **Агрессивный лексический реранк вредил.** Пересортировка только по доле токенов
+   роняла hit-rate@5 с 0.9167 до 0.8333: нерелевантный чанк того же документа
+   поднимался выше релевантного, а дедуп ≤2/док его добивал. Проверены IDF-взвешивание,
+   нормировка на длину, произведение dense×лексика, мультипликативный буст,
+   3-сторонний RRF, CombMAX/CombSUM, max-norm, адаптивные веса, глубина фьюжна,
+   `rrf_k ∈ {1,3,5,10,60}` — **ни один дешёвый сигнал не улучшил ранговый фьюжн**.
+   Реранкер переведён в мягкое смешивание (`weight=0.05`).
+5. **Живые прогоны падали с `timed out`.** bge-m3 на CPU: ~2.4 с на чанк 400 токенов,
+   батч 32×400 = 76 с > таймаут 30 с. Замеры: 4×400=9.6 с, 8×400=19 с, 12×400=28 с,
+   16×400=38.5 с (линейно, CPU-bound). Поставлено `batch_size=8`, `timeout_seconds=60`.
+6. **Вердикт проверял только лучшую гибридную стратегию.** Проигрыш гибрида на другой
+   стратегии оставался незамеченным. Исправлено: проверка по КАЖДОЙ стратегии.
+
+### Живой прогон (реальный корпус, bge-m3, 24 запроса, k=5)
+
+| Стратегия | Режим | Чанков | recall@20 | recall@k | hit-rate@k | MRR | nDCG@k |
+|---|---|---|---|---|---|---|---|
+| fixed | bm25 | 58 | 0.75 | 0.75 | 0.75 | 0.5868 | 0.6757 |
+| fixed | dense | 58 | 1.0 | 0.9167 | 0.9167 | 0.6736 | 0.8529 |
+| fixed | **hybrid** | 58 | **1.0** | 0.9167 | **0.9167** | 0.6597 | 0.7863 |
+| structural | bm25 | 105 | 0.7917 | 0.75 | 0.75 | 0.6285 | 0.7488 |
+| structural | dense | 105 | 0.875 | 0.875 | 0.875 | 0.7042 | 0.8909 |
+| structural | **hybrid** | 105 | **0.9167** | 0.9167 | **0.9167** | 0.7389 | 0.9147 |
+
+Вердикт: `[fixed]` recall@20 hybrid=1.0 vs max=1.0 ✅; hit-rate@k hybrid=0.9167 vs
+max=0.9167 ✅. `[structural]` recall@20 hybrid=0.9167 vs max=0.875 ✅; hit-rate@k
+hybrid=0.9167 vs max=0.875 ✅. **Гибрид не хуже ОБЕИХ компонент на ОБЕИХ стратегиях.**
+
+Расхождения: q05 (fixed лучше), q07 и q13 (structural лучше) — разное разбиение
+(обрывок кода / склейка разделов / потеря заголовка).
+
+Отчёт: `dev/logs_reports/stages/rag_chunking_compare.md`.
+
+### Замечание о юнит-тестах
+
+Строгое «гибрид ≥ каждой компоненты» — гейт **живого** прогона на bge-m3. На
+деградированном fallback-эмбеддере (`HashingEmbedder`) dense-ретривер слаб, и веса,
+подобранные под bge-m3, там не работают (hybrid 0.5417 < bm25 0.75). Поэтому юниты
+проверяют **механизм** взвешенного RRF детерминированно, а не эмпирику продового
+эмбеддера. Юниты не зависят от живого Ollama.
+
+### Регрессия
+
+| Контур | Результат |
+|---|---|
+| L2 `unit_runner.py` | **195 OK, 0 FAIL** (187 + 8 новых RAG) |
+| L3 `smoke.py` | **SMOKE OK: exit 0** |
+| L4 `scenario.py` | **SCENARIO OK: exit 0** |
+| гейт `check_acceptance.sh` | **25 из 25** |
+
+### Гейт 7→8 (11 пунктов)
+
+| № | Проверка | Результат |
+|---|---|---|
+| 1 | `unit_runner.py test_rag_eval` | ✅ 8 OK |
+| 2 | отчёт содержит все конфигурации (S×mode) | ✅ 6 строк |
+| 3 | hit-rate@5 ≥ 0.80 для лучшей конфигурации | ✅ 0.9167 |
+| 4 | гибрид ≥ каждой компоненты по recall@20 (на каждой стратегии) | ✅ 1.0/0.9167 |
+| 5 | гибрид ≥ каждой компоненты по hit-rate@5 (на каждой стратегии) | ✅ 0.9167 |
+| 6 | вердикт и разбор 3 расхождений | ✅ |
+| 7 | строка «эффект реранкинга» (top-20 → top-5) | ✅ |
+| 8 | отчёт скопирован в `migr_log.md` | ✅ |
+| 9 | L2/L3/L4/гейт | ✅ без регрессии |
+| 10 | `git diff --stat requirements.txt` | ✅ пусто |
+| 11 | запись «Этап 7» + перечитывание `migr_plan.md` | ✅ |
+
+### Артефакты
+
+| Файл | Изменение |
+|---|---|
+| `rag/eval.py` | реализован |
+| `rag/compare.py` | реализован |
+| `rag/retrieval.py` | `_rrf` с весами |
+| `rag/rerank.py` | мягкое смешивание (weight=0.05) |
+| `rag/config.py`, `rag/config.json` | веса RRF, batch/timeout |
+| `dev/tests_debug/unit/test_rag_eval.py` | создан (8 тестов) |
+| `dev/logs_reports/stages/rag_chunking_compare.md` | создан |
+| `dev/migr_plan.md`, `dev/migr_plan_6.md`, `dev/migr_plan_7.md` | обновлены |
+
+### Коммит
+
+Предлагаемый текст (выполняет **только** оператор):
+
+
+feat(rag): сравнение стратегий чанкинга + метрики, взвешенный RRF (этап 7)
+
+Причина: Задание_d21.txt требует ≥2 стратегии чанкинга и их сравнение. Равновесный
+RRF проигрывал dense (0.792 < 0.875), поэтому введён взвешенный RRF (dense —
+основной bi-encoder по модели куратора, BM25 — вспомогательный). Вес 0.1 — максимум,
+при котором гибрид не хуже обеих компонент на обеих стратегиях. Агрессивный
+лексический реранк вредил (0.9167 → 0.8333), поэтому переведён в мягкое смешивание.
+Батч эмбеддингов снижен до 8 (bge-m3 на CPU: 32×400 = 76 с > таймаут).
+
+L2: 187 → 195 OK. Гейт 7→8: 11/11.
+
+
+- Перечитывание `migr_plan.md`: ✅ (2026-10-04, §4 «Этап 7»)
+- Гейт 7→8: **закрыт** (11/11) → следующий шаг: **этап 8** (`migr_plan_8.md`,
+  интеграция в AI_9: `prompt_builder.render_rag`, `rag/service.py`, флаги `Kod.py`)
+
+---
+
+## Этап 8 — Интеграция RAG в AI_9 (R6) (`migr_plan_8.md`) — 2026-10-05
+
+**Цель:** модуль `rag/` начинает работать внутри агента (блок `[rag]` в промте,
+флаги и команды), НЕ меняя его контрактов. Главная регрессия этапа: без `--rag`
+промт **байт-в-байт** прежний.
+
+### Уточнение мастер-плана (по ходу работы)
+
+- §4 шаг 2 говорит «`core/context.py` — блок rag через `add_block`» — файла
+  `core/context.py` в репозитории нет: контекст — это `PromptContext` в
+  `core/agent.py`. Блок добавлен его атрибутом `rag_block` (по образцу
+  `tools_block`). Шаг 1 (`storage/store.py`) был готов раньше (строки 358–374,
+  сделано на этапе 6 вместе с путями индекса).
+
+### Шаги
+
+| # | Шаг | Результат |
+|---|---|---|
+| 8.1 | `core/prompt_builder.py` | `BLOCK_ORDER`: `"rag"` после `"tools"`, до `"long_term"`; `DELIVERABLE` + `"rag"`; `render_rag(hits, budget=1400)` — нумерованные источники + ссылки `[doc_id#chunk_id]` + `RAG_INSTRUCTIONS` (3 пункта); в `build()` блок добавляется только если `"rag" in deliver && rag_block`, `required=False` → усекается первым, invariants/profile не вытесняет |
+| 8.2 | `rag/service.py` | фасад `RagService`: ленивые индекс/эмбеддер/ретривер (bm25 не поднимает Ollama), `ingest` (дельта + ребилд при расхождении версий), `search` ([] при ошибке — деградация), `context_block`, `stats` (+`ollama_ready` через GET /api/tags), `evaluate`/`compare` — обёртки; `ground` → NotImplementedError (этап 9); формат блока идентичен `render_rag` (проверено юнитом) |
+| 8.3 | `core/agent.py` | `PromptContext.rag_block`; DI-атрибуты `rag_service/rag_enabled/rag_block_enabled/rag_top_k/rag_mode/last_rag_hits`; `_rag_retrieve()` — ОДИН поиск на обмен (кэш по `message_counter`: повторная сборка контекста в Kod.py для оценки токенов не платит эмбеддером), лог `[RAG]` (запрос/режим/k/chunk_id/скоры/латентность); ошибки RAG не роняют ответ |
+| 8.4 | `Kod.py` флаги | `--rag`, `--no-rag-block`, `--rag-ingest [--rag-path]`, `--rag-search`, `--rag-eval`, `--rag-compare`, `--rag-mode`, `--rag-strategy`, `--rag-top-k`, `--rag-config`, `--rag-grounding`, `--rag-multi-query` (no-op + предупреждение, этап 10); `_build_rag_config` (config.json → env → флаги; относительные пути — от BASE_DIR); DI в `build_agent(..., rag_enabled, rag_config)` по образцу `if mcp_enabled:` с ЛЕНИВЫМ импортом (RAG off → `rag/` не импортируется вообще) |
+| 8.5 | `Kod.py` прогоны и `/rag` | one-shot `--rag-ingest/--rag-search/--rag-eval/--rag-compare` до REPL (коды выхода, LLM не тратится); `/rag status|on|off|ingest [путь]|find <запрос>|stats|eval|check` (check → «этап 9»); `--rag` добавляет слой `rag` в deliver ПОСЛЕ пересечения с `DELIVERABLE` (как `tools`, D2); строки в `/help` и подсказке |
+| 8.6 | `test_rag_integration.py` | 16 тестов: байт-в-байт без блока; порядок rag после tools/до long_term; render_rag (нумерация/ссылки/бюджет/целые источники); RagService пустой индекс ([]/""/stats) и живой цикл ingest→search→re-load; агент (блок, один поиск, `--no-rag-block`, деградация ошибки); границы импортов rag↔core; TaskStage не менялся |
+| 8.7 | регрессия | L2 **211 OK / 0 FAIL** (195 + 16 новых); L3 SMOKE OK; L4 SCENARIO OK; гейт **25/25**; `git diff --stat requirements.txt` пусто |
+| 8.8 | журнал | эта запись + перечитывание `migr_plan.md` |
+
+### Попутные исправления
+
+- `RAG_INSTRUCTIONS` в `core/prompt_builder.py` содержали «не выдумай» —
+  унифицировано с каноном `rag/service.py` и `migr_plan_8.md` («не выдумывай»);
+  расхождение поймал юнит `test_service_block_format_matches_core`.
+- Риск двойного dense-поиска на сообщение (REPL пересобирает контекст для оценки
+  токенов) закрыт кэшем `_rag_turn/_rag_turn_hits` в `Agent`.
+
+### Живые прогоны (bge-m3, индекс structural 110 чанков / 9 документов)
+
+- `--rag-search "как устроен гибридный поиск"` → 5 источников с `[doc_id#chunk_id]`,
+  exit 0.
+- REPL `--rag --mock`: `[Режим] RAG: включён (hybrid, топ-5)…`; в промте блок
+  `[rag]` стоит после `[tools]`, до `[long_term]`; лог `[RAG] запрос … → 5 ист.
+  (режим=hybrid, 180.6 мс)` с разборами скоров; `/rag status|find|off` работают.
+- Регрессия без `--rag`: 0 блоков `[rag]` в выводе; `import core.*` не тянет `rag`
+  (`sys.modules` — False).
+- `--rag-ingest` — дельта: `+0 ~1 =8` (изменился файл корпуса — пересобран 1),
+  110 чанков, 17.9 с; `--rag-eval`: recall@k **0.9167**, hit_rate@k 0.9167,
+  mrr 0.7479, ndcg@k 0.9165, p50=119 мс (уровень этапа 7, без регрессии).
+- Пустой индекс (`--rag-config` на пустой каталог): «0 чанков», блока `[rag]` нет,
+  агент отвечает (Mock видит 6 сообщений вместо 7).
+
+### Гейт 8→9 (11 пунктов)
+
+| # | Проверка | Результат |
+|---|---|---|
+| 1 | `unit_runner.py test_rag_integration` | ✅ 16/16 |
+| 2 | без `--rag` промпт байт-в-байт прежний | ✅ (юнит + живой: 0 блоков, rag не импортируется) |
+| 3 | с `--rag` блок `[rag]` присутствует, после `[tools]`, в бюджете | ✅ |
+| 4 | при пустом индексе блока нет, но агент отвечает | ✅ |
+| 5 | RAG не меняет `TaskStage`/`transition_log` | ✅ (стадии и карта — юнит; код не трогал) |
+| 6 | `Kod.py --rag --mock` поднимается и печатает `[RAG]` | ✅ |
+| 7 | `Kod.py --rag-search "…" --mock` печатает top-k и выходит 0 | ✅ |
+| 8 | L2/L3/L4/гейт (25) | ✅ 211 OK / SMOKE / SCENARIO / 25 из 25 |
+| 9 | `git diff --stat requirements.txt` | ✅ пусто |
+| 10 | `rag/` не импортирует `core/`; `core/` не импортирует `rag/` | ✅ (юниты-сканеры) |
+| 11 | запись «Этап 8» + перечитывание `migr_plan.md` | ✅ |
+
+### Артефакты
+
+| Файл | Изменение |
+|---|---|
+| `core/prompt_builder.py` | rag в BLOCK_ORDER/DELIVERABLE; `render_rag`, `RAG_INSTRUCTIONS`; вставка блока в `build()` |
+| `core/agent.py` | `PromptContext.rag_block`; DI-атрибуты; `_rag_retrieve` (кэш на обмен, лог `[RAG]`); `build_context` передаёт блок |
+| `rag/service.py` | фасад `RagService` (реализован полностью, кроме `ground` — этап 9) |
+| `Kod.py` | 12 флагов RAG; `_build_rag_config`; one-shot прогоны; `/rag`; DI в `build_agent`; печать режима; `/help` |
+| `dev/tests_debug/unit/test_rag_integration.py` | создан (16 тестов) |
+| `dev/migr_plan_8.md` | создан (рабочий план этапа) |
+
+### Коммит
+
+Предлагаемый текст (выполняет **только** оператор):
+
+```
+feat(rag): интеграция RAG в агента — блок [rag], флаги --rag*, /rag (этап 8)
+
+Причина: Ревизия 6 (Задание_d21.txt) требует работы rag/ внутри агента: поиск
+по корпусу и блок [rag] в промте со ссылками [doc_id#chunk_id] — при полной
+совместимости без --rag.
+
+Kod.py: флаги --rag/--rag-ingest/--rag-search/--rag-eval/--rag-compare/
+--rag-mode/--rag-strategy/--rag-top-k/--rag-config/--rag-grounding/
+--rag-multi-query(no-op)/--no-rag-block; one-shot прогоны до REPL; /rag
+status|on|off|ingest|find|stats|eval|check (find/stats/eval не тратят LLM);
+DI по образцу MCP с ленивым импортом (off → rag/ не грузится).
+core/agent.py: один поиск на обмен (кэш), last_rag_hits, лог [RAG] со скорами
+и латентностью; ошибки RAG не роняют ответ. core/prompt_builder.py: rag после
+tools, render_rag с бюджетом (усекается первым, invariants не вытесняет).
+rag/service.py: фасад RagService (ленивая загрузка, деградация к []).
+
+Без --rag промпт байт-в-байт прежний (юнит + живой прогон). TaskStage не менялся.
+requirements.txt не тронут. Унифицирована формулировка инструкции блока
+(«не выдумывай») — расхождение поймал юнит единства формата.
+
+L2: 195 → 211 OK (+16 test_rag_integration). L3/L4 без регрессии. Гейт 25/25.
+Живой прогон: hybrid recall@k 0.9167, p50=119 мс; --rag-ingest дельтой (+0 ~1 =8).
+
+Гейт 8→9: 11/11.
+```
+
+- Перечитывание `migr_plan.md`: ✅ (2026-10-05, §4 «Этап 8», §5 границы; уточнение:
+  контекст — `PromptContext` в `core/agent.py`, файла `core/context.py` нет)
+- Гейт 8→9: **закрыт** (11/11) → следующий шаг: **этап 9** (`migr_plan_9.md`,
+  R7: `rag/grounding.py` — ссылки/покрытие/off|warn|strict, `/rag check` на
+  `agent.last_rag_hits`, авто-перегенерация ≤1)

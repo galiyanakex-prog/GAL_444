@@ -45,14 +45,15 @@ def render_tools(tools, max_tools: int = 20, max_schema_tokens: int = 600,
 
 # Канонический порядок блоков промта (invariants — после profile, до working;
 # tools (День 16) — после invariants, до long_term: ассистент видит доступные
-# инструменты, не смещая прежние блоки).
-BLOCK_ORDER = ("role", "profile", "invariants", "tools", "long_term", "working",
-               "summary", "short_term", "current")
+# инструменты, не смещая прежние блоки). rag (Ревизия 6) — после tools, до
+# long_term: найденные источники идут рядом с инструментами и не вытесняют память.
+BLOCK_ORDER = ("role", "profile", "invariants", "tools", "rag", "long_term",
+               "working", "summary", "short_term", "current")
 
 # Имена блоков, управляемые дозированной доставкой (role и current — всегда,
 # неуправляемы). Канонический набор для --deliver / /deliver / Agent.deliver:
 # пересечение deliver идёт по нему, а не по LAYER_ORDER (порядок слоёв памяти).
-DELIVERABLE = ("profile", "invariants", "tools", "long_term", "working",
+DELIVERABLE = ("profile", "invariants", "tools", "rag", "long_term", "working",
                "summary", "short_term")
 
 # Правило роли: инварианты учитываются в рассуждениях, но обычное сообщение
@@ -86,6 +87,54 @@ def render_invariants(constraints) -> str:
         lines.append(f"- [{inv.id}] {inv.description}")
     lines.append("")
     lines.append(INVARIANTS_INSTRUCTIONS)
+    return "\n".join(lines)
+
+
+# Инструкция блока [rag]: ответ обязан опираться на переданные источники.
+# Требование решения №4 (ссылки обязательны при активном RAG); строгая проверка
+# ответа кодом — grounding, этап 9.
+RAG_INSTRUCTIONS = (
+    "Инструкции:\n"
+    "1. Отвечай по возможности по этим источникам; каждое утверждение помечай "
+    "ссылкой вида [doc_id#chunk_id] из списка выше.\n"
+    "2. Если в источниках ответа нет — прямо скажи об этом, не выдумывай.\n"
+    "3. Источники могут противоречить друг другу — укажи это."
+)
+
+
+def render_rag(hits, budget: int = 1400, estimator=None, max_chars: int = 700) -> str:
+    """Текст блока [rag]: нумерованные источники + фрагменты + инструкция.
+
+    hits — список Hit (или любых объектов с chunk_id/doc_id/source/section/text);
+    budget — лимит токенов на блок: фрагменты добавляются, пока укладываются
+    (источник целиком либо пропускается — рваных цитат не будет).
+    """
+    if not hits:
+        return ""
+    estimator = estimator or (lambda text: max(1, len(text) // 4))
+    header = ["Найденные источники (используй их и ставь ссылки на них):"]
+    lines = list(header)
+    used = estimator("\n".join(lines))
+    n_placed = 0
+    for num, hit in enumerate(hits, 1):
+        ref = f"[{getattr(hit, 'doc_id', '')}#{getattr(hit, 'chunk_id', '')}]"
+        where = getattr(hit, "source", "") or ""
+        section = getattr(hit, "section", "") or ""
+        title = getattr(hit, "title", "") or ""
+        fragment = " ".join((getattr(hit, "text", "") or "").split())[:max_chars]
+        entry = [f"{num}. {ref} {where}" + (f" · {title}" if title else "")
+                 + (f" · раздел: {section}" if section else ""),
+                 f"    {fragment}"]
+        cost = estimator("\n".join(entry))
+        if used + cost > budget:
+            continue
+        lines.extend(entry)
+        used += cost
+        n_placed += 1
+    if not n_placed:
+        return ""
+    lines.append("")
+    lines.append(RAG_INSTRUCTIONS)
     return "\n".join(lines)
 
 
@@ -137,6 +186,14 @@ class PromptBuilder:
             )
         if "tools" in deliver and tools_block:
             blocks.append(("tools", False, {"role": "system", "content": f"[tools]\n{tools_block}"}))
+
+        # 3.6. RAG (Ревизия 6) — найденные источники после инструментов, до памяти.
+        # Блок опционален (required=False): при нехватке бюджета усекается первым,
+        # invariants/profile стоят раньше и не вытесняются. Пустой rag_block → блока
+        # нет вовсе (без --rag промпт байт-в-байт прежний).
+        rag_block = getattr(ctx, "rag_block", "")
+        if "rag" in deliver and rag_block:
+            blocks.append(("rag", False, {"role": "system", "content": f"[rag]\n{rag_block}"}))
 
         # 4..5. Слои памяти (long_term/working) — только если в deliver.
         for name in ("long_term", "working"):

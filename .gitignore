@@ -20,3 +20,7 @@ check_models.py
 .ssh
 
 
+
+# RAG: артефакты индекса (восстанавливаются командой --rag-ingest)
+rag/index/
+rag/.tmp/

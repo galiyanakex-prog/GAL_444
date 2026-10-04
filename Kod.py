@@ -20,10 +20,16 @@
 #   python Kod.py --mcp          # REPL с включённым MCP-слоем (/mcp …)
 #   python Kod.py --mcp-probe    # one-shot: подключиться к MCP и вывести
 #                                # список доступных инструментов (День 16)
+#   python Kod.py --rag          # REPL с RAG-слоем: поиск + блок [rag] в промте
+#   python Kod.py --rag-ingest   # one-shot: проиндексировать корпус и выйти
+#   python Kod.py --rag-search "текст"  # one-shot: поиск по индексу и выйти
+#   python Kod.py --rag-eval     # one-shot: метрики retrieval и выйти
+#   python Kod.py --rag-compare  # one-shot: стратегии чанкинга × режимы поиска
 #
 # Внутри чата: /memory /profile [list|show|use|new|route|auto] /tasks
 # /task <имя> /deliver /compare /summary /state /tokens /cost
-# /mcp [status|servers|tools|refresh|connect|disconnect] /help /exit
+# /mcp [status|servers|tools|refresh|connect|disconnect]
+# /rag [status|on|off|ingest|find|stats|eval] /help /exit
 # ============================================================================
 
 # 1. Импорты ----------------------------------------------------------------
@@ -40,6 +46,7 @@ except ImportError:
     pass
 
 import argparse
+import dataclasses
 from datetime import datetime
 
 # Путь к модулям дня: добавляем каталог скрипта в sys.path, чтобы импорты
@@ -111,6 +118,37 @@ parser.add_argument("--mcp-probe-server", type=str, default=None,
                          "(например time).")
 parser.add_argument("--no-tools-block", action="store_true",
                     help="С --mcp: не добавлять слой tools в промт (диагностика D2).")
+# --- RAG-модуль (День 21, Ревизия 6): выключен по умолчанию ----------------------
+parser.add_argument("--rag", action="store_true",
+                    help="Включить RAG-слой: поиск по корпусу и блок [rag] в промте.")
+parser.add_argument("--no-rag-block", action="store_true",
+                    help="С --rag: искать, но не добавлять слой rag в промт (диагностика).")
+parser.add_argument("--rag-ingest", action="store_true",
+                    help="One-shot: проиндексировать корпус (по умолчанию corpus.list) и выйти.")
+parser.add_argument("--rag-path", action="append", default=None, metavar="ПУТЬ",
+                    help="С --rag-ingest: конкретный файл/каталог вместо corpus.list "
+                         "(можно повторять).")
+parser.add_argument("--rag-search", type=str, default=None, metavar="ЗАПРОС",
+                    help="One-shot: поиск по индексу, вывести топ-k источников и выйти.")
+parser.add_argument("--rag-eval", action="store_true",
+                    help="One-shot: метрики качества retrieval на golden-датасете и выйти.")
+parser.add_argument("--rag-compare", action="store_true",
+                    help="One-shot: сравнить стратегии чанкинга × режимы ретривера и выйти.")
+parser.add_argument("--rag-mode", type=str, default=None,
+                    choices=("bm25", "dense", "hybrid"),
+                    help="Режим ретривера (по умолчанию из rag/config.json: hybrid).")
+parser.add_argument("--rag-strategy", type=str, default=None,
+                    choices=("fixed", "structural"),
+                    help="Стратегия чанкинга для индексации/сравнения.")
+parser.add_argument("--rag-top-k", type=int, default=None,
+                    help="Число источников в блоке [rag] (по умолчанию final_k=5).")
+parser.add_argument("--rag-config", type=str, default=None, metavar="FILE",
+                    help="Путь к JSON-конфигу RAG (по умолчанию rag/config.json).")
+parser.add_argument("--rag-grounding", type=str, default=None,
+                    choices=("off", "warn", "strict"),
+                    help="Режим проверки опоры на источники (полноценно — этап 9).")
+parser.add_argument("--rag-multi-query", action="store_true",
+                    help="Расширение запроса несколькими формулировками (этап 10).")
 parser.add_argument("--scheduler", action="store_true",
                     help="Поднять фоновый планировщик (24/7): периодический сбор данных "
                          "и регулярная сводка в JSON (задание Дня 18).")
@@ -173,13 +211,14 @@ def append_token_log(exchange, prompt_tokens, cost_rubles):
 
 # 8. Композиция объектов (DI) ---------------------------------------------------
 def build_agent(user_id=None, mock=False, mcp_enabled=False, scheduler_enabled=False,
-                scheduler_interval=60.0):
+                scheduler_interval=60.0, rag_enabled=False, rag_config=None):
     """Собирает Store + профиль-репозиторий + слои + LLM-клиент в Agent.
 
     MCP-слой опционален (mcp_enabled=False по умолчанию — поведение = den_15):
     gateway → provider → ToolRegistry; каталог сохраняется через Store.
     Планировщик (День 18, scheduler_enabled) — фоновый worker 24/7, независимый
     от LLM; по умолчанию не поднимается.
+    RAG-слой (День 21, rag_enabled) — фасад RagService; по умолчанию выключен.
     """
     store = Store(MEMORY_ROOT, log=log_line)
     repo = ProfileRepository(os.path.join(MEMORY_ROOT, "profiles.db"), log=log_line)
@@ -242,6 +281,20 @@ def build_agent(user_id=None, mock=False, mcp_enabled=False, scheduler_enabled=F
                     "created_at": snap.created_at})
         except Exception as error:
             log_line(f"[MCP] стартовое discovery не удалось: {error}")
+
+    # RAG-слой (День 21): только при явном включении; RAG off по умолчанию.
+    # Индекс/эмбеддер грузятся лениво (внутри RagService) — старт не платит за
+    # загрузку; ошибка сборки слоя не роняет агента (деградация без блока [rag]).
+    if rag_enabled:
+        try:
+            cfg = rag_config or _build_rag_config(args)
+            service = _make_rag_service(cfg)
+            agent.rag_service = service
+            agent.rag_enabled = True
+            agent.rag_top_k = cfg.retrieval.final_k
+            agent.rag_mode = cfg.retrieval.mode
+        except Exception as error:
+            log_line(f"[RAG] слой не собран: {type(error).__name__}: {error}")
 
     # Планировщик фоновых задач (День 18): внешний worker (не LLM). Собирается
     # только при явном включении; привязка к user_id — после идентификации
@@ -567,6 +620,253 @@ def handle_mcp_command(agent: Agent, user_input: str):
           "pipeline <запрос> | route <текст>\n")
 
 
+# 8.3 RAG-модуль (День 21, Ревизия 6): конфиг, one-shot прогоны, /rag -----------------
+# Все импорты rag/ — ЛЕНИВЫЕ и только внутри этих функций: без явного включения
+# (флаг --rag или /rag …) модуль rag/ не импортируется вообще (инвариант §5).
+
+def _abs_path(path: str) -> str:
+    """Относительный путь — от BASE_DIR (запуск из любого каталога)."""
+    return path if os.path.isabs(path) else os.path.join(BASE_DIR, path)
+
+
+def _build_rag_config(cli_args):
+    """RagConfig: rag/config.json → env → флаги CLI (флаги — высший приоритет)."""
+    from rag.config import RagConfig
+
+    cfg_path = _abs_path(cli_args.rag_config) if cli_args.rag_config else \
+        os.path.join(BASE_DIR, "rag", "config.json")
+    cfg = RagConfig.load(cfg_path)
+
+    patch = {}
+    if cli_args.rag_mode:
+        patch["retrieval"] = dataclasses.replace(cfg.retrieval, mode=cli_args.rag_mode)
+    if cli_args.rag_strategy:
+        patch["chunking"] = dataclasses.replace(cfg.chunking, strategy=cli_args.rag_strategy)
+    if cli_args.rag_top_k:
+        patch["retrieval"] = dataclasses.replace(
+            patch.get("retrieval", cfg.retrieval), final_k=cli_args.rag_top_k)
+    if cli_args.rag_grounding:
+        patch["grounding"] = dataclasses.replace(cfg.grounding, mode=cli_args.rag_grounding)
+    if cli_args.rag_multi_query:
+        patch["retrieval"] = dataclasses.replace(
+            patch.get("retrieval", cfg.retrieval), multi_query=True)
+        print("[RAG] ⚠ --rag-multi-query пока no-op: расширение запроса — этап 10.")
+    if patch:
+        cfg = dataclasses.replace(cfg, **patch)
+
+    # Относительные пути конфига — от BASE_DIR (индекс и corpus.list).
+    cfg = dataclasses.replace(
+        cfg,
+        index_dir=_abs_path(cfg.index_dir),
+        corpus=dataclasses.replace(cfg.corpus, list_file=_abs_path(cfg.corpus.list_file)),
+    )
+    return cfg.validate()
+
+
+def _make_rag_service(cfg):
+    """Фасад RagService поверх конфига (единственная точка входа ядра в rag/)."""
+    from rag.service import RagService
+    return RagService(cfg, log=log_line)
+
+
+def _print_rag_hits(hits, header: str):
+    """Печать выдачи поиска (one-shot и /rag find — без обращения к LLM)."""
+    print(f"{header} Найдено источников: {len(hits)}")
+    for num, hit in enumerate(hits, 1):
+        section = f" · раздел: {hit.section}" if hit.section else ""
+        print(f"\n  {num}. [{hit.doc_id}#{hit.chunk_id}] {hit.source}{section}"
+              f" · score={hit.score:.4f}")
+        text = " ".join((hit.text or "").split())
+        print(f"     {text[:300]}{'…' if len(text) > 300 else ''}")
+    print()
+
+
+def run_rag_ingest(cli_args) -> int:
+    """One-shot: индексация корпуса (дельтой) → сохранить индекс → выйти."""
+    cfg = _build_rag_config(cli_args)
+    service = _make_rag_service(cfg)
+    paths = [_abs_path(p) for p in cli_args.rag_path] if cli_args.rag_path else None
+    try:
+        report = service.ingest(paths)
+    except Exception as error:
+        print(f"[RAG] Индексация не удалась: {type(error).__name__}: {error}",
+              file=sys.stderr)
+        return 1
+    print(f"[RAG] Индексация завершена: +{report.added} новых, ~{report.updated} "
+          f"изменённых, -{report.removed} удалённых, ={report.skipped} без изменений")
+    print(f"[RAG] Чанков в индексе: {report.chunks}; эмбеддингов запрошено: "
+          f"{report.embed_calls}; время: {report.seconds}s")
+    for err in list(report.errors)[:5]:
+        print(f"[RAG] ⚠ {err}", file=sys.stderr)
+    print(f"[RAG] Индекс сохранён: {cfg.index_dir}")
+    return 0
+
+
+def run_rag_search(cli_args) -> int:
+    """One-shot: поиск по индексу, печать топ-k источников, выйти (LLM не тратит)."""
+    cfg = _build_rag_config(cli_args)
+    service = _make_rag_service(cfg)
+    if not service.stats().get("n_chunks"):
+        print("[RAG] Индекс пуст — сначала: python Kod.py --rag-ingest", file=sys.stderr)
+        return 1
+    hits = service.search(cli_args.rag_search, k=cli_args.rag_top_k, mode=cli_args.rag_mode)
+    if not hits:
+        print("[RAG] Ничего не найдено (запрос не зацепился за индекс).", file=sys.stderr)
+        return 1
+    _print_rag_hits(hits, f"[RAG] Запрос «{cli_args.rag_search}» "
+                          f"(режим {cli_args.rag_mode or cfg.retrieval.mode}):")
+    return 0
+
+
+def run_rag_eval(cli_args) -> int:
+    """One-shot: метрики retrieval на golden-датасете (LLM не тратит)."""
+    cfg = _build_rag_config(cli_args)
+    service = _make_rag_service(cfg)
+    if not service.stats().get("n_chunks"):
+        print("[RAG] Индекс пуст — сначала: python Kod.py --rag-ingest", file=sys.stderr)
+        return 1
+    dataset = os.path.join(BASE_DIR, "rag", "datasets", "queries.jsonl")
+    report = service.evaluate(dataset=dataset, k=cfg.retrieval.final_k)
+    print(f"[RAG] Оценка по {report.dataset} (k={report.k}, "
+          f"режим {cli_args.rag_mode or cfg.retrieval.mode}):")
+    for name, value in report.metrics.items():
+        print(f"  {name}: {value:.4f}")
+    lat = report.latency_ms
+    if lat:
+        print(f"  латентность: p50={lat.get('p50', 0):.0f} мс, "
+              f"p95={lat.get('p95', 0):.0f} мс")
+    return 0
+
+
+def run_rag_compare(cli_args) -> int:
+    """One-shot: стратегии чанкинга × режимы ретривера (тяжёлый: ребилд индексов)."""
+    from rag.compare import render_report
+
+    cfg = _build_rag_config(cli_args)
+    service = _make_rag_service(cfg)
+    strategies = [cli_args.rag_strategy] if cli_args.rag_strategy else ["fixed", "structural"]
+    modes = [cli_args.rag_mode] if cli_args.rag_mode else ["bm25", "dense", "hybrid"]
+    queries = os.path.join(BASE_DIR, "rag", "datasets", "queries.jsonl")
+    print(f"[RAG] Сравнение: стратегии={strategies}, режимы={modes}, k={cfg.retrieval.final_k}. "
+          "Перестройка индексов + эмбеддинги — это долго (минуты на CPU).")
+    report = service.compare(strategies=strategies, modes=modes, queries=queries,
+                             k=cfg.retrieval.final_k)
+    print(render_report(report))
+    return 0
+
+
+def _ensure_rag_service(agent: Agent):
+    """Собрать RagService в рантайме (RAG включили в чате без флага --rag)."""
+    cfg = _build_rag_config(args)
+    agent.rag_service = _make_rag_service(cfg)
+    agent.rag_top_k = cfg.retrieval.final_k
+    agent.rag_mode = cfg.retrieval.mode
+    return agent.rag_service
+
+
+def handle_rag_command(agent: Agent, user_input: str):
+    """Разбирает /rag [status|on|off|ingest [путь]|find <запрос>|stats|eval|check].
+
+    find/stats/eval НЕ обращаются к LLM (только поиск по индексу) — см. мастер-план §4.
+    """
+    parts = user_input.split()
+    sub = parts[1] if len(parts) > 1 else ""
+
+    if sub in ("", "status"):
+        if agent.rag_service is None:
+            print("[RAG] Слой выключен (запустите с флагом --rag или: /rag on).\n")
+            return
+        st = agent.rag_service.stats()
+        state = "включён" if agent.rag_enabled else "выключен (/rag on)"
+        print(f"[RAG] Состояние: {state}; блок в промте: "
+              f"{'да' if agent.rag_block_enabled and 'rag' in agent.deliver else 'нет'}")
+        print(f"  Индекс: {st['n_chunks']} чанков / {st['n_docs']} документов, "
+              f"dim={st['dim']}, модель: {st['model_id'] or '—'}")
+        print(f"  Режим: {st['mode']}; стратегия чанкинга индекса: "
+              f"{st.get('strategy', '—')}; каталог: {st['index_dir']}")
+        print(f"  Ollama ({st['ollama_url']}): "
+              f"{'доступна' if st['ollama_ready'] else 'НЕдоступна — dense/hybrid деградируют'}")
+        print()
+        return
+
+    if sub == "on":
+        if agent.rag_service is None:
+            try:
+                _ensure_rag_service(agent)
+            except Exception as error:
+                print(f"[RAG] Не удалось собрать слой: {error}\n")
+                return
+        agent.rag_enabled = True
+        if agent.rag_block_enabled:
+            agent.deliver.add("rag")
+        print("[RAG] Включён: следующий запрос обогатится блоком [rag].\n")
+        return
+
+    if sub == "off":
+        agent.rag_enabled = False
+        agent.deliver.discard("rag")
+        print("[RAG] Выключён: блок [rag] больше не попадает в промт.\n")
+        return
+
+    if sub == "ingest":
+        try:
+            service = agent.rag_service or _ensure_rag_service(agent)
+            paths = [_abs_path(p) for p in parts[2:]] or None
+            report = service.ingest(paths)
+        except Exception as error:
+            print(f"[RAG] Индексация не удалась: {error}\n")
+            return
+        print(f"[RAG] Индексация: +{report.added} ~{report.updated} "
+              f"-{report.removed} ={report.skipped}; чанков: {report.chunks}; "
+              f"{report.seconds}s\n")
+        return
+
+    if sub == "find":
+        if len(parts) < 3:
+            print("[RAG] Использование: /rag find <запрос>\n")
+            return
+        service = agent.rag_service or _ensure_rag_service(agent)
+        query = user_input.split(None, 2)[2]
+        hits = service.search(query, k=agent.rag_top_k)
+        if not hits:
+            print("[RAG] Ничего не найдено (индекс пуст? /rag stats).\n")
+            return
+        _print_rag_hits(hits, f"[RAG] Запрос «{query}»:")
+        return
+
+    if sub == "stats":
+        service = agent.rag_service or _ensure_rag_service(agent)
+        st = service.stats()
+        print(f"[RAG] Индекс: {st['n_chunks']} чанков / {st['n_docs']} документов; "
+              f"dim={st['dim']}; модель: {st['model_id'] or '—'}; "
+              f"размер: {st['size_bytes']} Б")
+        print(f"  Режим: {st['mode']}; эмбеддер: {st['embedding_provider']} "
+              f"({st['ollama_url']}, {'жив' if st['ollama_ready'] else 'недоступен'})\n")
+        return
+
+    if sub == "eval":
+        service = agent.rag_service or _ensure_rag_service(agent)
+        dataset = os.path.join(BASE_DIR, "rag", "datasets", "queries.jsonl")
+        try:
+            report = service.evaluate(dataset=dataset)
+        except Exception as error:
+            print(f"[RAG] Оценка не удалась: {error}\n")
+            return
+        print(f"[RAG] Метрики (k={report.k}):")
+        for name, value in report.metrics.items():
+            print(f"  {name}: {value:.4f}")
+        print()
+        return
+
+    if sub == "check":
+        print("[RAG] Проверка опоры ответа на источники (grounding) появится на этапе 9 "
+              "плана dev/migr_plan.md.\n")
+        return
+
+    print("[RAG] Подкоманды: status | on | off | ingest [путь] | find <запрос> | "
+          "stats | eval | check\n")
+
+
 # 9. Интервью-инициализация ------------------------------------------------------
 def run_interview(agent: Agent, user_id: str):
     """Проводит интервью (стиль/констрейнты/контекст) и создаёт дерево памяти."""
@@ -624,6 +924,13 @@ def print_help():
     print("  /mcp jobs            — задачи планировщика (24/7)")
     print("  /mcp pipeline <запрос> — пайплайн search→summarize→saveToFile")
     print("  /mcp route <текст>   — объяснить выбор инструмента/сервера")
+    print("  /rag [status]        — состояние RAG-слоя и индекса")
+    print("  /rag on|off          — включить/выключить блок [rag] в промте")
+    print("  /rag ingest [путь]   — проиндексировать корпус (по умолчанию corpus.list)")
+    print("  /rag find <запрос>   — поиск по индексу (без обращения к LLM)")
+    print("  /rag stats           — метрики индекса (чанки, документы, модель)")
+    print("  /rag eval            — метрики retrieval на golden-датасете")
+    print("  /rag check           — проверка опоры ответа на источники (этап 9)")
     print("  /help                — эта справка")
     print("  /exit                — завершить и сохранить состояние")
     print()
@@ -934,11 +1241,23 @@ def main():
     if args.mcp_probe:
         sys.exit(run_mcp_probe(args.mcp_probe_server))
 
+    # One-shot прогоны RAG (День 21): индексация / поиск / метрики / сравнение.
+    # REPL не запускается, LLM не тратится. Заданные прогоны идут по порядку
+    # (индексация раньше метрик), код выхода — худший из кодов прогонов.
+    rag_runs = [(args.rag_ingest, run_rag_ingest),
+                (args.rag_search is not None, run_rag_search),
+                (args.rag_eval, run_rag_eval),
+                (args.rag_compare, run_rag_compare)]
+    if any(flag for flag, _ in rag_runs):
+        sys.exit(max((run(args) for flag, run in rag_runs if flag), default=0))
+
     # Идентификация: --user либо интерактивный ввод ДО загрузки памяти.
     user_id = args.user
+    rag_cfg = _build_rag_config(args) if args.rag else None
     agent = build_agent(user_id=user_id, mock=args.mock, mcp_enabled=args.mcp,
                         scheduler_enabled=args.scheduler,
-                        scheduler_interval=args.scheduler_interval)
+                        scheduler_interval=args.scheduler_interval,
+                        rag_enabled=args.rag, rag_config=rag_cfg)
 
     # Накопительный трекер токенов сессии (локальная оценка).
     exchange_tracker = {"n": 0, "tokens": 0, "cost": 0.0}
@@ -978,6 +1297,13 @@ def main():
     # диагностический откат (проверить поведение без блока [tools]).
     if args.mcp and not args.no_tools_block:
         agent.deliver.add("tools")
+    # RAG (День 21): слой rag включается только явным флагом — без --rag набор
+    # delivery и промпт байт-в-байт прежние. --no-rag-block: ищем и логируем,
+    # но в промпт не подмешиваем (диагностика влияния блока).
+    agent.rag_block_enabled = not args.no_rag_block
+    if args.rag and agent.rag_service is not None:
+        if not args.no_rag_block:
+            agent.deliver.add("rag")
     # Бюджет промта: None — обрезание выключено (поведение не меняется).
     agent.prompt_budget = args.budget
     print(f"[Режим] Доставка слоёв: {sorted(agent.deliver)}")
@@ -986,6 +1312,17 @@ def main():
               f"(необязательные блоки опускаются)")
     if args.mock:
         print("[Режим] MockClient (заглушка) — живых запросов к API не будет.")
+    if args.rag:
+        if agent.rag_service is not None:
+            st = agent.rag_service.stats()
+            block = "в промпт подмешивается" if (agent.rag_block_enabled
+                                                 and "rag" in agent.deliver) \
+                else "в промпт НЕ подмешивается (--no-rag-block)"
+            print(f"[Режим] RAG: включён ({st['mode']}, топ-{agent.rag_top_k}), {block}; "
+                  f"индекс: {st['n_chunks']} чанков / {st['n_docs']} документов; "
+                  f"Ollama: {'доступна' if st['ollama_ready'] else 'НЕдоступна'}")
+        else:
+            print("[Режим] RAG: ⚠ слой не собран (см. лог) — агент работает без поиска.")
 
     # Планировщик 24/7 (День 18): поднимаем ПОСЛЕ идентификации пользователя.
     if args.scheduler:
@@ -995,7 +1332,8 @@ def main():
 
     print("Команды: /memory /profile [list|show|use|new|route|auto] /tasks /task [retry] "
           "/plan /approve /goto /transitions /step /run /pause /resume /deliver /compare "
-          "/summary /state /tokens /cost /mcp summary|jobs|pipeline|route /help /exit\n")
+          "/summary /state /tokens /cost /mcp summary|jobs|pipeline|route "
+          "/rag status|on|off|ingest|find|stats|eval /help /exit\n")
 
     # Главный цикл.
     while True:
@@ -1128,6 +1466,9 @@ def main():
                     continue
                 if command == "/mcp":
                     handle_mcp_command(agent, user_input)
+                    continue
+                if command == "/rag":
+                    handle_rag_command(agent, user_input)
                     continue
                 if command == "/exit":
                     stop_scheduler(agent)
