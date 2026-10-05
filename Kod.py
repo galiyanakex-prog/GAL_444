@@ -650,7 +650,6 @@ def _build_rag_config(cli_args):
     if cli_args.rag_multi_query:
         patch["retrieval"] = dataclasses.replace(
             patch.get("retrieval", cfg.retrieval), multi_query=True)
-        print("[RAG] ⚠ --rag-multi-query пока no-op: расширение запроса — этап 10.")
     if patch:
         cfg = dataclasses.replace(cfg, **patch)
 
@@ -831,6 +830,9 @@ def handle_rag_command(agent: Agent, user_input: str):
         if not hits:
             print("[RAG] Ничего не найдено (индекс пуст? /rag stats).\n")
             return
+        # Ручной поиск тоже задаёт «последние найденные источники» — после него
+        # доступен /rag check <ответ> без обращения к LLM.
+        agent.last_rag_hits = hits
         _print_rag_hits(hits, f"[RAG] Запрос «{query}»:")
         return
 
@@ -839,9 +841,20 @@ def handle_rag_command(agent: Agent, user_input: str):
         st = service.stats()
         print(f"[RAG] Индекс: {st['n_chunks']} чанков / {st['n_docs']} документов; "
               f"dim={st['dim']}; модель: {st['model_id'] or '—'}; "
-              f"размер: {st['size_bytes']} Б")
-        print(f"  Режим: {st['mode']}; эмбеддер: {st['embedding_provider']} "
-              f"({st['ollama_url']}, {'жив' if st['ollama_ready'] else 'недоступен'})\n")
+              f"размер: {st['size_bytes']} Б; RAM≈{st['ram_estimate_bytes']} Б")
+        print(f"  Режим: {st['mode']}; стратегия: {st['strategy']}; "
+              f"multi-query: {'вкл' if st['multi_query'] else 'выкл'}; "
+              f"эмбеддер: {st['embedding_provider']} "
+              f"({st['ollama_url']}, {'жив' if st['ollama_ready'] else 'недоступен'})")
+        cache = st["cache"]
+        lat = st["latency"]
+        print(f"  Кэш: {'вкл' if cache['enabled'] else 'выкл'}, записей {cache['entries']}"
+              f"/{cache['max_entries']}, TTL {cache['ttl_seconds']}с; "
+              f"попаданий {cache['hits']}, промахов {cache['misses']}, "
+              f"вытеснений {cache['evictions']}, инвалидаций {cache['invalidations']} "
+              f"(hit-rate {cache['hit_rate']})")
+        print(f"  Латентность поиска: p50={lat['p50']} мс, p95={lat['p95']} мс "
+              f"(замеров {lat['n']})\n")
         return
 
     if sub == "eval":
@@ -859,8 +872,23 @@ def handle_rag_command(agent: Agent, user_input: str):
         return
 
     if sub == "check":
-        print("[RAG] Проверка опоры ответа на источники (grounding) появится на этапе 9 "
-              "плана dev/migr_plan.md.\n")
+        # /rag check <ответ> — grounding по ПОСЛЕДНИМ найденным чанкам (LLM не тратит).
+        if len(parts) < 3:
+            print("[RAG] Использование: /rag check <текст ответа>\n")
+            return
+        if not agent.last_rag_hits:
+            print("[RAG] Нет последних найденных источников — сначала обычный "
+                  "вопрос или /rag find <запрос>.\n")
+            return
+        answer = user_input.split(None, 2)[2]
+        report = agent.check_grounding(answer)
+        if report is None:
+            print("[RAG] Grounding недоступен (слой не собран).\n")
+            return
+        print("[RAG] Проверка опоры на источники "
+              f"(режим {agent.rag_service.cfg.grounding.mode}):")
+        print(agent.rag_service.grounding_render(report))
+        print()
         return
 
     print("[RAG] Подкоманды: status | on | off | ingest [путь] | find <запрос> | "
@@ -930,7 +958,7 @@ def print_help():
     print("  /rag find <запрос>   — поиск по индексу (без обращения к LLM)")
     print("  /rag stats           — метрики индекса (чанки, документы, модель)")
     print("  /rag eval            — метрики retrieval на golden-датасете")
-    print("  /rag check           — проверка опоры ответа на источники (этап 9)")
+    print("  /rag check <ответ>   — проверка опоры ответа на последние источники")
     print("  /help                — эта справка")
     print("  /exit                — завершить и сохранить состояние")
     print()
@@ -1320,7 +1348,8 @@ def main():
                 else "в промпт НЕ подмешивается (--no-rag-block)"
             print(f"[Режим] RAG: включён ({st['mode']}, топ-{agent.rag_top_k}), {block}; "
                   f"индекс: {st['n_chunks']} чанков / {st['n_docs']} документов; "
-                  f"Ollama: {'доступна' if st['ollama_ready'] else 'НЕдоступна'}")
+                  f"Ollama: {'доступна' if st['ollama_ready'] else 'НЕдоступна'}; "
+                  f"grounding: {agent.rag_service.cfg.grounding.mode}")
         else:
             print("[Режим] RAG: ⚠ слой не собран (см. лог) — агент работает без поиска.")
 
@@ -1333,7 +1362,7 @@ def main():
     print("Команды: /memory /profile [list|show|use|new|route|auto] /tasks /task [retry] "
           "/plan /approve /goto /transitions /step /run /pause /resume /deliver /compare "
           "/summary /state /tokens /cost /mcp summary|jobs|pipeline|route "
-          "/rag status|on|off|ingest|find|stats|eval /help /exit\n")
+          "/rag status|on|off|ingest|find|stats|eval|check /help /exit\n")
 
     # Главный цикл.
     while True:
@@ -1488,6 +1517,9 @@ def main():
             last_ctx = agent.build_context(user_input)
             last_messages = agent.prompts.build(last_ctx, agent.deliver)
             prompt_tokens = estimate_messages_tokens(last_messages)
+            # Grounding (этап 9): авто-перегенерация — дополнительный обмен, его
+            # оценка добавляется к сессии (multi-query на этапе 10 — так же).
+            prompt_tokens += getattr(agent, "last_grounding_extra_tokens", 0)
             exchange_tracker["n"] += 1
             exchange_tracker["tokens"] += prompt_tokens
             exchange_cost = (prompt_tokens * args.price_in) / 1_000_000

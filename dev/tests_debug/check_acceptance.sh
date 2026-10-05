@@ -487,6 +487,128 @@ print('ok')
 PYEOF
 "
 
+# --- Ревизия 6: RAG-модуль (этап 11, +8 проверок: 26..33) -------------------------
+
+# 26: импорт rag (пакет собирается, публичный API доступен).
+check "RAG: импорт пакета rag" bash -c "
+  '$PY' - <<'PYEOF'
+import sys
+sys.path.insert(0, '$KOD')
+import rag
+from rag import RagService, RagConfig, Hit, Chunk
+assert RagService and RagConfig and Hit and Chunk
+print('ok')
+PYEOF
+"
+
+# 27: индекс строится (hashing-эмбеддер, без Ollama) и переживает save/load.
+check "RAG: индекс строится и переживает save/load" bash -c "
+  '$PY' - <<'PYEOF'
+import sys, os, tempfile
+sys.path.insert(0, '$KOD')
+from rag.config import RagConfig
+from rag.chunking import chunk_document
+from rag.embedding import HashingEmbedder
+from rag.index import RagIndex
+cfg = RagConfig.default()
+doc = {'doc_id': 'd1', 'source': 'a.md', 'title': 'A', 'text': 'BM25 ранжирует документы. ' * 40,
+       'sha1': 'x', 'mtime': 1.0, 'content_type': 'text'}
+chunks = chunk_document(doc, cfg.chunking, 'fixed')
+assert chunks, 'нет чанков'
+idx = RagIndex(cfg).build(chunks, HashingEmbedder(dim=64))
+assert len(idx.chunks) == len(chunks)
+with tempfile.TemporaryDirectory() as d:
+    idx.save(d)
+    again = RagIndex.load(d, cfg)
+    assert len(again.chunks) == len(chunks), 'индекс не пережил перезапуск'
+print('ok')
+PYEOF
+"
+
+# 28: поиск отдаёт ≥1 хит с метаданными (source/section/chunk_id).
+check "RAG: поиск отдаёт хит с метаданными" bash -c "
+  '$PY' - <<'PYEOF'
+import sys
+sys.path.insert(0, '$KOD')
+from rag.config import RagConfig
+from rag.chunking import chunk_document
+from rag.embedding import HashingEmbedder
+from rag.index import RagIndex
+from rag.retrieval import Retriever
+cfg = RagConfig.default()
+doc = {'doc_id': 'd1', 'source': 'core/invariants.py', 'title': 'Инварианты',
+       'text': 'Инварианты запрещают менять технологический стек проекта. ' * 30,
+       'sha1': 'x', 'mtime': 1.0, 'content_type': 'text'}
+chunks = chunk_document(doc, cfg.chunking, 'fixed')
+idx = RagIndex(cfg).build(chunks, HashingEmbedder(dim=64))
+hits = Retriever(idx, cfg, HashingEmbedder(dim=64)).search('инварианты стек', k=3, mode='bm25')
+assert hits, 'нет хитов'
+h = hits[0]
+assert h.chunk_id and h.source and h.doc_id, 'нет метаданных'
+print('ok')
+PYEOF
+"
+
+# 29: обе стратегии чанкинга дают РАЗНОЕ разбиение.
+check "RAG: две стратегии чанкинга дают разное разбиение" bash -c "
+  '$PY' - <<'PYEOF'
+import sys
+sys.path.insert(0, '$KOD')
+from rag.config import RagConfig
+from rag.chunking import chunk_document
+cfg = RagConfig.default()
+text = ('# Раздел A\n\n' + 'Первый абзац про инварианты. ' * 20 + '\n\n'
+        + '# Раздел B\n\n' + 'Второй абзац про бюджет токенов. ' * 20)
+doc = {'doc_id': 'd1', 'source': 'a.md', 'title': 'A', 'text': text,
+       'sha1': 'x', 'mtime': 1.0, 'content_type': 'text'}
+fixed = chunk_document(doc, cfg.chunking, 'fixed')
+structural = chunk_document(doc, cfg.chunking, 'structural')
+assert fixed and structural, 'пустое разбиение'
+assert [c.text for c in fixed] != [c.text for c in structural], 'разбиения совпали'
+print('ok')
+PYEOF
+"
+
+# 30: отчёт сравнения стратегий существует.
+check "RAG: отчёт сравнения стратегий существует" test -s "$KOD/dev/logs_reports/stages/rag_chunking_compare.md"
+
+# 31: без --rag промпт НЕ содержит блок [rag] (регрессия байт-в-байт).
+check "RAG: без --rag промпт не содержит [rag]" bash -c "
+  '$PY' - <<'PYEOF'
+import sys
+sys.path.insert(0, '$KOD')
+from core.prompt_builder import PromptBuilder
+from core.agent import PromptContext
+ctx = PromptContext(query='вопрос', memory_blocks={'profile': 'П', 'invariants': 'И',
+                    'long_term': 'Д', 'working': 'Р'}, short_term_messages=[])
+msgs = PromptBuilder('Ты ассистент').build(ctx, {'role','profile','invariants','long_term','working','short_term','current'})
+joined = '\n'.join(m.get('content','') for m in msgs)
+assert '[rag]' not in joined, 'блок [rag] просочился без --rag'
+print('ok')
+PYEOF
+"
+
+# 32: RAG не меняет TaskStage (набор стадий неизменен).
+check "RAG: TaskStage не затронут" bash -c "
+  '$PY' - <<'PYEOF'
+import sys
+sys.path.insert(0, '$KOD')
+from core.state_machine import TaskStage
+expected = {'new','planning','plan_approved','implementation','validation','done','paused','failed'}
+assert {s.value for s in TaskStage} == expected, {s.value for s in TaskStage}
+print('ok')
+PYEOF
+"
+
+# 33: --rag-eval завершается с hit-rate@5 ≥ 0.80 (живой индекс; пропуск без индекса).
+check "RAG: --rag-eval hit-rate@5 ≥ 0.80" bash -c "
+  if [ ! -f '$KOD/rag/index/meta.json' ]; then echo 'индекс отсутствует — пропуск'; exit 0; fi
+  OUT=\$('$PY' '$KOD/Kod.py' --rag-eval 2>&1)
+  echo \"\$OUT\" | grep -q 'hit_rate@k' || { echo 'нет метрики'; exit 1; }
+  HR=\$(echo \"\$OUT\" | grep 'hit_rate@k' | head -n1 | sed 's/.*: //')
+  awk -v hr=\"\$HR\" 'BEGIN { exit (hr+0 >= 0.80) ? 0 : 1 }'
+"
+
 # ИтОГ
 
 echo ""

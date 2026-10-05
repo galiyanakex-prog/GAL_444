@@ -13,7 +13,7 @@
 Агент не владеет файлами/БД напрямую: работает через MemoryManager и PromptBuilder
 (инкапсуляция через фасады, arch_prim R3).
 """
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from datetime import datetime
 import json
 import time
@@ -248,6 +248,8 @@ class Agent:
         # (каждый dense-поиск = вызов эмбеддера). Инвалидация — по message_counter.
         self._rag_turn = None
         self._rag_turn_hits: list = []
+        # Оценка токенов авто-перегенерации grounding (Kod.py прибавляет к сессии).
+        self.last_grounding_extra_tokens = 0
 
         # Текущая сессия (для краткосрочной памяти).
         self.session_id = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -641,6 +643,76 @@ class Agent:
         return f"Действие выполнено: {action.description}"
 
     # --- Цикл: сообщение → память → промт → LLM → ответ --------------------------
+    def check_grounding(self, answer: str, mode: str = None):
+        """Проверить опору ответа на ПОСЛЕДНИЕ найденные источники (этап 9, R7).
+
+        Возвращает GroundingReport; None — если RAG/фасад выключены или источников
+        не было (тогда проверять не на что). Ошибки не роняют ответ.
+        """
+        if self.rag_service is None or not self.last_rag_hits:
+            return None
+        if not hasattr(self.rag_service, "ground"):
+            return None                         # фасад без grounding (duck-typing)
+        try:
+            return self.rag_service.ground(answer, hits=self.last_rag_hits, mode=mode)
+        except Exception as exc:
+            self.log(f"[RAG] grounding не выполнен ({type(exc).__name__}: {exc})")
+            return None
+
+    def _grounding_guard(self, messages: list, answer: str) -> str:
+        """Strict-режим (решение №4): hallucination → ОДНА авто-перегенерация.
+
+        Порядок: проверка → при verdict=hallucination фидбэк-промпт («оперись на
+        N источников, убери неподтверждённое») → повторная проверка → если снова
+        провал — явная пометка в ответе. Цикла нет: максимум max_regenerations
+        (по умолчанию 1) попыток. warn/off ничего не меняют.
+        """
+        if self.rag_service is None or not self.last_rag_hits:
+            return answer
+        if not (self.rag_enabled and self.rag_block_enabled):
+            return answer                       # блок не подмешивался — цитировать не из чего
+        if not hasattr(self.rag_service, "ground"):
+            return answer                       # фасад без grounding (duck-typing)
+        gcfg = getattr(self.rag_service.cfg, "grounding", None)
+        if gcfg is None or gcfg.mode == "off":
+            return answer
+        report = self.check_grounding(answer)
+        if report is None or report.verdict != "hallucination":
+            return answer
+        if gcfg.mode != "strict" or gcfg.max_regenerations < 1:
+            self.log("[RAG] grounding: verdict=hallucination "
+                     f"(режим {gcfg.mode} — авто-перегенерация не выполняется)")
+            return answer
+
+        feedback = self.rag_service.grounding_feedback(
+            report, answer, len(self.last_rag_hits))
+        retry_messages = list(messages) + [
+            {"role": "assistant", "content": answer},
+            {"role": "user", "content": feedback},
+        ]
+        try:
+            candidate = self.llm.complete(retry_messages)
+        except Exception as exc:
+            self.log(f"[RAG] авто-перегенерация не удалась ({type(exc).__name__}: {exc})")
+            candidate = None
+        if not candidate:
+            return answer
+        # Учёт доп. обмена (оценка): Kod.py прибавит к токенам и стоимости сессии.
+        self.last_grounding_extra_tokens += sum(
+            max(1, len(m.get("content", "")) // 4) for m in retry_messages)
+        report2 = self.check_grounding(candidate)
+        if report2 is not None:
+            report2 = replace(report2, regenerated=True)
+        if report2 is not None and report2.verdict == "hallucination":
+            self.log("[RAG] grounding: после авто-перегенерации снова hallucination — "
+                     "в ответ добавлена явная пометка")
+            return (candidate + "\n\n"
+                    "⚠ [RAG] Ответ не полностью подтверждён найденными источниками — "
+                    "проверьте утверждения, помеченные ссылками.")
+        self.log("[RAG] grounding: авто-перегенерация помогла "
+                 f"(verdict={report2.verdict if report2 else 'unchecked'})")
+        return candidate
+
     def _rag_retrieve(self, query: str) -> list:
         """Один поиск по RAG на запрос: сохранить last_rag_hits + строка [RAG] в лог.
 
@@ -656,7 +728,16 @@ class Agent:
             return self._rag_turn_hits
         started = time.time()
         try:
-            hits = self.rag_service.search(query, k=self.rag_top_k, mode=self.rag_mode)
+            if getattr(self.rag_service.cfg.retrieval, "multi_query", False):
+                # Multi-query (этап 10): переформулировки через LLM + склейка RRF.
+                # Токены переформулирования учитываются в оценке сессии.
+                variants = self.rag_service.rephrase(query, llm=self.llm.complete)
+                self.last_grounding_extra_tokens += sum(
+                    max(1, len(v) // 4) for v in variants)
+                hits = self.rag_service.search_multi(
+                    query, variants=variants, k=self.rag_top_k, mode=self.rag_mode)
+            else:
+                hits = self.rag_service.search(query, k=self.rag_top_k, mode=self.rag_mode)
         except Exception as exc:                     # страховка: фасад уже глотает
             self.log(f"[RAG] поиск не удался ({type(exc).__name__}: {exc}) — блок опущен")
             self.last_rag_hits = []
@@ -721,6 +802,9 @@ class Agent:
         """Полный цикл обработки одного сообщения пользователя."""
         self.message_counter += 1
         message_id = f"M{self.message_counter}"
+        # Оценка доп. обменов этого хода (multi-query на этапе 10, авто-перегенерация
+        # grounding на этапе 9). Сброс ДО build_context: multi-query пишет токены там.
+        self.last_grounding_extra_tokens = 0
 
         # 0. Авто-роутинг: профиль выбирается ДО сборки промта — активный профиль
         #    подключён к каждому запросу (персонализация).
@@ -747,6 +831,11 @@ class Agent:
             answer = self.llm.complete(messages)
         if answer is None:
             return None
+
+        # 3.5. Grounding (этап 9, решение №4): strict + hallucination → одна
+        #      авто-перегенерация с фидбэком; при повторном провале — пометка.
+        #      Делается ДО сохранения в память: в память должен лечь финальный ответ.
+        answer = self._grounding_guard(messages, answer)
 
         # 4. Сохранение ответа и обновление рабочей памяти (жизненный цикл).
         self.remember_message("assistant", answer, message_id + "a")

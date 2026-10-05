@@ -13,6 +13,7 @@
 from __future__ import annotations
 
 import array
+import hashlib
 import json
 import math
 import os
@@ -271,3 +272,25 @@ class RagIndex:
             "model_id": self.meta.get("model_id", ""),
             "size_bytes": size,
         }
+
+    # ---------- версия и mtime (для кэша поиска, этап 10) ----------
+    def version(self) -> str:
+        """Отпечаток состояния индекса: параметры сборки + sha1 всех документов.
+
+        Меняется при ребилде, смене модели/стратегии или правке любого документа —
+        ключ кэша поиска обязан включать его, иначе выдача «протухает».
+        """
+        parts = [
+            str(self.meta.get("model_id", "")),
+            str(self.meta.get("dim", "")),
+            str(self.meta.get("chunker_version", "")),
+            str(self.meta.get("strategy", "")),
+        ]
+        for doc_id in sorted(self.meta.get("docs", {})):
+            parts.append(f"{doc_id}:{self.meta['docs'][doc_id].get('sha1', '')}")
+        return hashlib.sha256("|".join(parts).encode("utf-8")).hexdigest()
+
+    def mtimes(self) -> dict:
+        """{doc_id: mtime} — для инвалидации кэша по времени правки файлов."""
+        return {doc_id: meta.get("mtime", 0.0)
+                for doc_id, meta in self.meta.get("docs", {}).items()}
