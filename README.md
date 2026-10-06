@@ -94,7 +94,7 @@ RagService (индексация корпуса → гибридный поис�
 | Тип | Что хранит | Где (файл/хранилище) | Почему так |
 |---|---|---|---|
 | **Краткосрочная** (`ShortTermMemory`, scope=`session`) | текущий диалог — неизменяемые сообщения с `id`/`parent_id` | `users/<id>/tasks/<task>/sessions/<sid>/session.json` | сообщения — история (append-only), их нельзя переписывать; `parent_id` — задел ветвления |
-| **Рабочая** (`WorkingMemory`, scope=`task`) | состояние задачи: `description`, `refs`, `lifecycle_summary`, `decisions`, `constraints`, `facts`, `open_questions`, `current_state` | `users/<id>/tasks/<task>/working_memory.json` | это **пересчитываемое состояние**, а не лог сообщений: списки дополняются, скаляры перезаписываются |
+| **Рабочая** (`WorkingMemory`, scope=`task`) | состояние задачи: `description`, `refs`, `lifecycle_summary`, `decisions`, `constraints`, `facts`, `open_questions`, `current_state`, **`goal`** (цель диалога), **`clarifications`** (уточнения), **`terms`** (термины `{термин: определение}`) | `users/<id>/tasks/<task>/working_memory.json` | это **пересчитываемое состояние**, а не лог сообщений: списки дополняются, скаляры перезаписываются, `terms` — merge |
 | **Долговременная** (`LongTermMemory`, scope=`user`) | `profile_ref` (ССЫЛКА), `tasks[]` (со ссылками и `source_session`), `decisions[]` (`{text, status}` — «выполнена»/«не выполнена»), `knowledge[]` | `users/<id>/long_term_memory.json` | живёт между сессиями и задачами; профиль держится отдельно, здесь — только ссылка (канон куратора) |
 | **Профиль** (`Profile`, scope=`user`) | **несколько профилей** на пользователя: `profile_id`, `name`, `domain`, `triggers[]`, `style` + `constraints` + `context`, `skills[]` (пайплайн) | JSON в SQLite (`profiles(user_id, profile_id)`), зеркала `users/<id>/profiles/<pid>.json` | профили — отдельная сущность в БД, а не часть долговременной памяти; запись слиянием (MERGE); активный профиль подключён к каждому запросу |
 
@@ -361,7 +361,7 @@ provider, demo_server, scheduler_server, pipeline_server) и `scheduler/` (model
 runner, aggregator — ядро планировщика на stdlib). SDK импортируется только здесь.
 
 **RAG** (`rag/`) — расширяемый RAG-модуль: индексация корпуса, гибридный поиск, блок `[rag]`
-в промте, проверка опоры ответа. Сеть — исключительно `127.0.0.1:11434` (Ollama).
+в промте, источники/цитаты и проверка опоры ответа. Сеть — исключительно `127.0.0.1:11434` (Ollama).
 
 **CLI** (`Kod.py`) — DI с `mcp_enabled=False` по умолчанию; семейство `/mcp` и `/rag`;
 флаги `--mcp`, `--mcp-probe`, `--scheduler*`, `--rag*`, `--no-tools-block`. REPL
@@ -421,15 +421,18 @@ AI_9/
 ├── memory/                      # 4 слоя + MemoryManager (ToolMemoryPolicy — задел)
 ├── rag/                         # RAG-модуль (индексация + гибридный поиск)
 │   ├── config.py / config.json  # RagConfig (+ валидация: эмбеддинги только 127.0.0.1:11434)
-│   ├── types.py / text.py       # Chunk/DocMeta/Hit/… ; нормализация/токенизация/стемминг
+│   ├── types.py / text.py       # Chunk/DocMeta/Hit/Source/Quote/Answer ; нормализация/токенизация
 │   ├── corpus.py / chunking.py  # сбор корпуса, sha1/mtime; fixed | structural
 │   ├── embedding.py             # OllamaEmbedder (bge-m3, dim 1024) + HashingEmbedder (фолбэк)
 │   ├── index.py                 # плоский индекс: BM25-постинги + векторы; save/load/version
-│   ├── retrieval.py / rerank.py # bm25 | dense | hybrid (RRF + MMR); LexicalReranker
+│   ├── retrieval.py / rerank.py # bm25 | dense | hybrid (RRF + MMR) + порог; LexicalReranker
+│   ├── rewrite.py               # query rewrite (снятие шума + термины из истории)
 │   ├── cache.py                 # SearchCache — LRU+TTL, инвалидация по mtime
-│   ├── grounding.py / eval.py / compare.py  # опора ответа; метрики; сравнение стратегий
+│   ├── grounding.py / eval.py / compare.py  # опора ответа; метрики; сравнение режимов
+│   ├── sources.py / citations.py # источники (source+section/chunk_id) и дословные цитаты
+│   ├── verify.py                # проверка формата ответа (источники/цитаты/смысл) на 10 вопросах
 │   ├── service.py               # RagService — фасад для Kod.py/Agent
-│   ├── datasets/                # corpus.list (9 файлов) + queries.jsonl (24 golden)
+│   ├── datasets/                # corpus.list (9 файлов) + queries.jsonl (24 golden + 10 контрольных)
 │   └── index/                   # рантайм-индекс (в .gitignore): chunks/postings/vectors/meta
 ├── storage/
 │   ├── store.py                 # фасад: + mcp_servers/catalog + tool_audit (+ RAG-метрики)
@@ -717,15 +720,18 @@ $ python Kod.py --mcp-probe
 ### RAG-слой (`rag/`)
 
 Расширяемый RAG-модуль: индексация корпуса, гибридный поиск, блок `[rag]` в промпте
-со ссылками и проверка опоры ответа (grounding).
+со ссылками, источники/цитаты и проверка опоры ответа (grounding).
 
 **Конвейер:**
 
 
 corpus (rag/datasets/corpus.list) → chunking (fixed | structural)
   → embedding (Ollama bge-m3, локально) → index (BM25 + dense, плоский)
-  → retrieval (BM25 ⊕ dense → RRF → реранк → MMR) → блок [rag] в промпте
-  → grounding (ответ обязан опираться на найденное)
+  → rewrite (query rewrite: снятие шума + термины из истории)
+  → retrieval (BM25 ⊕ dense → RRF → реранк → MMR → порог отсечения)
+  → блок [rag] в промпте → ответ со ссылками [doc_id#chunk_id]
+  → sources (source + section/chunk_id) + quotes (дословные цитаты из чанков)
+  → grounding (ответ обязан опираться на найденное; режим «не знаю» при слабом контексте)
 
 
 **Границы модуля:**
@@ -741,10 +747,23 @@ corpus (rag/datasets/corpus.list) → chunking (fixed | structural)
 
 - **Гибрид ≥ каждой компоненты** (BM25, dense) по recall@20 и hit-rate@5; веса RRF
   подобраны экспериментально (`w_bm25=0.1`, `w_dense=1.0`); порядок:
-  BM25⊕dense → RRF → реранк → дедуп (≤2/док) → MMR (λ=0.7) → top-k;
+  BM25⊕dense → RRF → реранк → дедуп (≤2/док) → MMR (λ=0.7) → **порог отсечения** → top-k;
+- **Порог отсечения** (`retrieval.threshold=0.45`, абсолютный косинус запрос-чанк):
+  отсекает нерелевантный хвост (нерелевантные ≤0.42, релевантные ≥0.52); калибруется
+  под модель эмбеддингов (в офлайн-юнитах на `HashingEmbedder` — 0.14);
+- **Query rewrite** (`rag/rewrite.py`): снятие шумовых оборотов («пожалуйста, расскажи…»)
+  и подтягивание значимых терминов из истории при местоименном/коротком запросе; режимы
+  `heuristic` (детерминированно) и `llm` (через DI); обязан не ухудшать recall@5;
 - **Ссылки обязательны** при активном RAG: `[doc_id#chunk_id]`; grounding
   (`off|warn|strict`) ловит выдуманные числа/даты и в `strict` запускает **одну**
   авто-перегенерацию с фидбэк-промптом;
+- **Источники и цитаты** (`rag/sources.py`, `rag/citations.py`): ответ несёт список
+  `Source(source, section, chunk_id, score)` (дедуп по `chunk_id`, сорт по скору) и
+  дословные `Quote(chunk_id, text, source)` — фрагменты **чанков** (не текста ответа),
+  чтобы проверить, что модель не выдумывает;
+- **Режим «не знаю»** (`unknown.enabled`): при пустом RAG-поиске (всё ниже порога)
+  `verdict="insufficient"`, источников/цитат нет, **LLM не вызывается** — ответ
+  «В источниках нет ответа на этот вопрос…»;
 - **Кэш поиска** (`SearchCache`): ключ `sha256(model_id | index_version | norm_query |
   params | filters)`, TTL + инвалидация по mtime затронутых документов, LRU 256;
 - **Multi-query** (опц.): `rephrase` через LLM (фолбэк — детерминированная эвристика
@@ -760,10 +779,12 @@ corpus (rag/datasets/corpus.list) → chunking (fixed | structural)
   → инкрементально: неизменённые документы не переэмбедятся
 
 ./run.sh --rag --user alice  →  вопрос
-  → RagService.search (кэш → BM25⊕dense → RRF → реранк → MMR) → context_block
+  → RagService.search (кэш → rewrite → BM25⊕dense → RRF → реранк → MMR → порог) → context_block
   → PromptBuilder: блок [rag] ПОСЛЕ [tools], ДО [long_term] (усекается первым)
   → llm.complete → ответ со ссылками [doc_id#chunk_id]
+  → sources (source+section/chunk_id) + quotes (дословные цитаты из чанков)
   → grounding (strict): провал → ОДНА авто-перегенерация с фидбэком → пометка
+  → пустой поиск (всё ниже порога) → «не знаю» (insufficient), LLM не вызывается
 
 /rag check <ответ>  → ground(answer, last_rag_hits) → ok | partial | hallucination
 /rag stats          → индекс, модель, размер, RAM, кэш, латентность p50/p95, Ollama
@@ -788,18 +809,26 @@ curl -s http://127.0.0.1:11434/api/tags
 bash
 ./run.sh --rag-ingest                       # проиндексировать корпус (одна команда)
 ./run.sh --rag-search "как считается бюджет токенов"   # поиск без LLM (топ-5 со скорами)
+./run.sh --rag-ask "как считается бюджет токенов"      # ответ + источники + цитаты (тратит LLM)
+./run.sh --rag-verify                       # проверка источников/цитат на 10 вопросах
 ./run.sh --rag-eval                         # метрики на golden-датасете (recall/hit-rate/mrr/ndcg)
 ./run.sh --rag-compare                      # сравнение стратегий × режимов + вердикт
 ./run.sh --rag --user alice                 # REPL с блоком [rag] в промпте
 ./run.sh --rag --rag-mode bm25 --rag-top-k 3
+./run.sh --rag --rag-threshold 0.45         # порог отсечения нерелевантных результатов
+./run.sh --rag --rag-unknown on             # режим «не знаю» при слабом контексте
+./run.sh --rag --rag-reranker lexical       # второй этап ранжирования (реранкер)
+./run.sh --rag --rag-rewrite heuristic      # query rewrite перед поиском (off|llm|heuristic)
 ./run.sh --rag --rag-grounding strict       # проверка опоры ответа (off|warn|strict)
 ./run.sh --rag --rag-multi-query            # переформулирование запроса (тратит токены)
 ./run.sh --rag --no-rag-block               # диагностика: ищет, но в промпт не кладёт
 
 
 **Флаги RAG:** `--rag`, `--no-rag-block`, `--rag-ingest`, `--rag-path <путь>`,
-`--rag-search <запрос>`, `--rag-eval [датасет]`, `--rag-compare`, `--rag-mode {bm25,dense,hybrid}`,
-`--rag-strategy {fixed,structural}`, `--rag-top-k <N>`, `--rag-config <файл>`,
+`--rag-search <запрос>`, `--rag-ask <вопрос>`, `--rag-verify`, `--rag-eval [датасет]`,
+`--rag-compare`, `--rag-mode {bm25,dense,hybrid}`, `--rag-strategy {fixed,structural}`,
+`--rag-top-k <N>`, `--rag-threshold <F>`, `--rag-unknown {off,on}`,
+`--rag-reranker {off,lexical}`, `--rag-rewrite {off,llm,heuristic}`, `--rag-config <файл>`,
 `--rag-grounding {off,warn,strict}`, `--rag-multi-query`.
 
 **Пример вывода:**
@@ -841,7 +870,8 @@ LLM tool-use:
   (аудит в tool_audit.jsonl; TaskStage не меняется — инструмент ≠ переход)
 
 RAG:
-  --rag → RagService.search → блок [rag] → ответ со ссылками → grounding (strict: одна авто-перегенерация)
+  --rag → RagService.search → блок [rag] → ответ со ссылками → источники/цитаты → grounding
+  (strict: одна авто-перегенерация; пустой поиск → «не знаю» без вызова LLM)
 
 
 **Сводная механика контроля (главная граница):**
@@ -956,8 +986,8 @@ Store сохраняет конфиг и каталог.   ← users/<id>/integr
 
 7. **Служебное пространство (dev/)** — «проект про проект». Миграция по процессной модели
    «план-эталон → рабочие планы этапов → журнал»; красный гейт → карточка ошибки.
-   Тестовый контур: L1 импорт; L2 unit_runner (244 OK); L3 smoke; L4 scenario; гейт
-   33/33; приёмка 54/54 — всё без живого ключа и сети, в `.tmp/`, `users/` не
+   Тестовый контур: L1 импорт; L2 unit_runner (280 OK); L3 smoke; L4 scenario; гейт
+   43/43; приёмка 54/54 — всё без живого ключа и сети, в `.tmp/`, `users/` не
    затрагивается.
 
 **Инвариант всей системы**: детерминизм недетерминированной LLM даёт код — внешний мир
@@ -1014,6 +1044,10 @@ Store сохраняет конфиг и каталог.   ← users/<id>/integr
 | `/rag on\|off` | включить/выключить RAG в сессии |
 | `/rag ingest` | проиндексировать корпус (инкрементально) |
 | `/rag find <запрос>` | поиск со скорами — **почему** выбран чанк |
+| `/rag ask <вопрос>` | ответ с RAG (ответ + источники + цитаты) |
+| `/rag sources` | источники последнего ответа агента (source + section/chunk_id) |
+| `/rag quotes` | цитаты последнего ответа агента (дословные фрагменты чанков) |
+| `/rag verify` | проверка источников/цитат на 10 контрольных вопросах |
 | `/rag check <ответ>` | проверка опоры ответа на последние источники (без LLM) |
 | `/rag stats` | индекс, модель, RAM, кэш, латентность p50/p95, Ollama |
 | `/rag eval` | метрики на golden-датасете |
@@ -1056,6 +1090,8 @@ python -m integrations.mcp.pipeline_server              # MCP-сервер па�
 
 # RAG
 ./run.sh --rag-ingest                       # проиндексировать корпус
+./run.sh --rag-ask "как считается бюджет токенов"   # ответ + источники + цитаты
+./run.sh --rag-verify                       # проверка источников/цитат на 10 вопросах
 ./run.sh --rag --user alice                 # REPL с блоком [rag]
 
 
@@ -1066,8 +1102,10 @@ python -m integrations.mcp.pipeline_server              # MCP-сервер па�
 (one-shot результат задания), `--no-tools-block`, `--scheduler` (фоновый worker 24/7),
 `--scheduler-interval <сек>`.
 **Флаги RAG:** `--rag`, `--no-rag-block`, `--rag-ingest`, `--rag-path <путь>`,
-`--rag-search <запрос>`, `--rag-eval [датасет]`, `--rag-compare`, `--rag-mode {bm25,dense,hybrid}`,
-`--rag-strategy {fixed,structural}`, `--rag-top-k <N>`, `--rag-config <файл>`,
+`--rag-search <запрос>`, `--rag-ask <вопрос>`, `--rag-verify`, `--rag-eval [датасет]`,
+`--rag-compare`, `--rag-mode {bm25,dense,hybrid}`, `--rag-strategy {fixed,structural}`,
+`--rag-top-k <N>`, `--rag-threshold <F>`, `--rag-unknown {off,on}`,
+`--rag-reranker {off,lexical}`, `--rag-rewrite {off,llm,heuristic}`, `--rag-config <файл>`,
 `--rag-grounding {off,warn,strict}`, `--rag-multi-query`.
 
 Все пути строятся от `BASE_DIR`; ключ — `API_KEY` из `.env` (`load_dotenv()`).
@@ -1093,9 +1131,10 @@ MCP:    --mcp-probe → start → READY → discover → печать списк
         /mcp connect|tools|refresh|status|disconnect (токенов LLM не тратят;
         недоступный сервер → FAILED/DEGRADED, REPL жив — деградация, не падение)
         LLM tool-use: _respond_with_tools (LLM → tool call → ToolExecutor → tool-сообщение → LLM)
-RAG:    --rag → RagService.search (кэш → BM25⊕dense → RRF → реранк → MMR)
-        → блок [rag] в промпте (после [tools]) → ответ со ссылками → grounding
-        (strict: провал → одна авто-перегенерация); без --rag rag/ не импортируется
+RAG:    --rag → RagService.search (кэш → rewrite → BM25⊕dense → RRF → реранк → MMR → порог)
+        → блок [rag] в промпте (после [tools]) → ответ со ссылками → источники/цитаты
+        → grounding (strict: провал → одна авто-перегенерация; пустой поиск → «не знаю»);
+        без --rag rag/ не импортируется
 выход:  save_state() + сейв task_state.json (включая transition_log)
 
 
@@ -1116,12 +1155,14 @@ retry на HTTP 429 с задержками 2 → 4 → 8 сек, таймаут
 | Уровень | Команда | Результат |
 |---|---|---|
 | L1 | `python -m py_compile Kod.py core/*.py memory/*.py storage/*.py integrations/mcp/*.py` | exit 0 |
-| L2 | `env -u API_KEY python dev/tests_debug/unit_runner.py` | **244 OK, 0 FAIL** (18 модулей) |
+| L2 | `env -u API_KEY python dev/tests_debug/unit_runner.py` | **280 OK, 0 FAIL** (27 модулей) |
 | L3 | `API_KEY=test-key python dev/tests_debug/smoke.py` | SMOKE OK, exit 0 |
 | L4 | `API_KEY=test-key python dev/tests_debug/scenario.py` | SCENARIO OK, exit 0 |
-| Гейт | `API_KEY=test-key bash dev/tests_debug/check_acceptance.sh` | **33 из 33 ✅, exit 0** |
+| Гейт | `API_KEY=test-key bash dev/tests_debug/check_acceptance.sh` | **43 из 43 ✅, exit 0** |
+| Диалоги | `API_KEY=test-key python dev/tests_debug/dialog_runner.py` | DIALOG OK, exit 0 (2 длинных сценария) |
 | Интеграция | `timeout 60 python Kod.py --mcp-probe` (реальный HTTP-сервер) | READY → 4 тула (1 `time` + 3 `weather`) → DISCONNECTED, exit 0 (не гейт — живой прогон) |
 | Живой tool-use | `printf 'который час в Москве?\n/exit\n' \| python Kod.py --user u --mcp` | LLM вызывает `mcp.time.get_time` → ответ (не гейт — живой прогон) |
+| Живой RAG | `env -u API_KEY python Kod.py --rag-ask "…"` / `--rag-eval` / `--rag-verify` | ответ + источники + цитаты; hit-rate@5 = 0.8824; источники/цитаты 10/10 (не гейт — живой прогон) |
 
 **Состав тестовых модулей:**
 
@@ -1133,13 +1174,18 @@ retry на HTTP 429 с задержками 2 → 4 → 8 сек, таймаут
   schema_version=1); **MCP не трогает состояние** (TaskStage не изменился,
   transition_log пуст); **MCP off по умолчанию**; конфиг (дефолт/битый/неизвестные
   ключи); LLM tool-use (парсеры, агентный цикл, блок `[tools]`);
-- `unit/test_rag_*.py` — интеграция (16), grounding (18), cache (15);
+- `unit/test_rag_*.py` — интеграция (16), grounding (18), cache (15), rerank (10),
+  verify (10), working_memory (9), service;
 - L4 сценарии — `scenario_mcp_discovery`, `scenario_llm_tool_use`, `scenario_tool_denied`,
   `scenario_multiserver_flow` + базовые (+ `scen_rag.md` — сценарий ручной демонстрации);
-- гейт `check_acceptance.sh` — **33 проверки** (25 прежних + 8 RAG: импорт `rag`; индекс
-  строится и переживает save/load; поиск отдаёт хит с метаданными; две стратегии
-  чанкинга; отчёт сравнения; без `--rag` нет `[rag]`; `TaskStage` не затронут;
-  `--rag-eval` hit-rate@5 ≥ 0.80). Идемпотентен, `users/` не трогает.
+- `dialog_runner.py` — прогон 2 длинных диалоговых сценариев (`scen_dialog_A.md` — 12
+  сообщений, `scen_dialog_B.md` — 13) с активным RAG: поиск на каждом обмене, источники
+  в каждом ответе, цель/термины в памяти задачи;
+- гейт `check_acceptance.sh` — **43 проверки** (25 прежних + 8 RAG Ревизии 6 + 10 RAG
+  Ревизии 7: импорт `rewrite/sources/citations/verify`; rewrite снимает шум и подтягивает
+  термины; источники (дедуп/сорт) и цитаты; режим «не знаю» без вызова LLM; `--rag-ask`
+  даёт источники+цитаты; `--rag-verify` 10/10; высокий порог → «не знаю»; 4 режима ответа;
+  `WorkingMemory` round-trip; 2 длинных сценария). Идемпотентен, `users/` не трогает.
 
 **Человеческая версия приёмки** — **54 критерия, 54/54 зелёных** — в
 [`dev/Проверка.md`](dev/Проверка.md):
@@ -1190,9 +1236,13 @@ retry на HTTP 429 с задержками 2 → 4 → 8 сек, таймаут
 | Конфликт запроса и инварианта | «Перепиши наш API на FastAPI» (при инварианте Django) | отказ: id правила, причина, альтернатива |
 | **RAG: индексация корпуса** | `./run.sh --rag-ingest` | дельта индексации + число чанков (110 / 9 документов) |
 | **RAG: гибридный поиск** | `./run.sh --rag-search "как считается бюджет токенов"` | топ-5 источников со скорами и метаданными (`source`/`section`/`chunk_id`) |
+| **RAG: ответ с источниками и цитатами** | `./run.sh --rag-ask "как считается бюджет токенов"` | ответ + список источников (`source`+`section`/`chunk_id`) + дословные цитаты из чанков |
+| **RAG: проверка формата на 10 вопросах** | `./run.sh --rag-verify` | источники 10/10, цитаты 10/10, смысл=цитаты (отчёт) |
+| **RAG: режим «не знаю»** | `./run.sh --rag-ask "квантовые киты в борще" --rag-threshold 0.99` | `insufficient`, «В источниках нет ответа…», LLM не вызывается |
 | **RAG: блок `[rag]` в промпте** | `./run.sh --rag --user demo` → вопрос | блок `[rag]` после `[tools]`, до `[long_term]`; ответ со ссылками `[doc_id#chunk_id]` |
 | **RAG: проверка опоры (grounding)** | `/rag check <ответ с выдуманным числом>` | `Вердикт: hallucination`, «числа вне источников» |
 | **RAG: метрики и сравнение** | `./run.sh --rag-eval` / `--rag-compare` | recall/hit-rate/mrr/ndcg; таблица «стратегия × режим» + вердикт |
+| **RAG: длинные диалоги** | `python dev/tests_debug/dialog_runner.py` | 2 сценария (12 и 13 сообщений): поиск на каждом обмене, источники в каждом ответе, цель/термины в памяти |
 | **RAG: без `--rag` — регрессия** | `./run.sh --user demo` (без флага) | блок `[rag]` отсутствует, `rag` не импортируется |
 
 ---
@@ -1204,23 +1254,26 @@ retry на HTTP 429 с задержками 2 → 4 → 8 сек, таймаут
 
 AI_9/dev/
 ├── migr_plan.md                  # план-эталон миграции
-├── migr_plan_0.md … migr_plan_11.md  # исполняемые планы этапов (конец этапа — гейт в следующий)
+├── migr_plan_0.md … migr_plan_12.md  # исполняемые планы этапов (конец этапа — гейт в следующий)
 ├── migr_log.md                   # журнал миграции «было → стало → проверка → статус»
 ├── Проверка.md                   # чек-лист приёмки (54 критерия + три сценария дня 20)
 ├── old_vers/                     # история прошлых ревизий (1…7)
 ├── meta_promt/                   # метапромты (вспомогательные промты)
 ├── tests_debug/
-│   ├── check_acceptance.sh       # гейт приёмки (33 проверки)
+│   ├── check_acceptance.sh       # гейт приёмки (43 проверки)
 │   ├── unit_runner.py            # L2-раннер (без pytest)
 │   ├── smoke.py                  # L3-смоук (+ MCP-прогон + tool-use)
 │   ├── scenario.py               # L4-сценарии (+ mcp_discovery, llm_tool_use, tool_denied, multiserver_flow)
+│   ├── dialog_runner.py          # прогон 2 длинных диалоговых сценариев (часть 4)
 │   ├── unit/
 │   │   ├── … прежние модули (MCP/RAG off)
 │   │   ├── test_mcp.py           # контракты + реестр + gateway + call_tool + policy + tool-use
-│   │   └── test_rag_*.py         # integration / grounding / cache
+│   │   └── test_rag_*.py         # integration / grounding / cache / rerank / verify / working_memory
 │   ├── scenario/
 │   │   ├── scen_1.md             # сценарий ручной демонстрации MCP
-│   │   └── scen_rag.md           # сценарий ручной демонстрации RAG
+│   │   ├── scen_rag.md           # сценарий ручной демонстрации RAG
+│   │   ├── scen_dialog_A.md      # длинный диалог A (12 сообщений, RAG-модуль)
+│   │   └── scen_dialog_B.md      # длинный диалог B (13 сообщений, инварианты)
 │   └── .tmp/                     # единственное место прогонов (.gitignore)
 ├── logs_reports/                 # stages/ + errors/ + archive/
 └── vps/                          # инфраструктурный контур VPS (units/, evidence/, скрипты)
@@ -1289,7 +1342,7 @@ AI_9/dev/
 | `core/tool_routing.py` / `core/tool_pipeline.py` | выбор инструмента; пайплайн из инструментов |
 | `integrations/mcp/*` | MCP-слой: config / transport (stdio + HTTP + fake) / client / gateway / provider / demo_server / scheduler_server / pipeline_server |
 | `integrations/scheduler/*` | ядро планировщика (stdlib): models / store / runner / aggregator |
-| `rag/*` | RAG-модуль: config / corpus / chunking / embedding / index / retrieval / rerank / cache / grounding / eval / compare / service |
+| `rag/*` | RAG-модуль: config / corpus / chunking / embedding / index / retrieval / rerank / rewrite / cache / grounding / eval / compare / sources / citations / verify / service |
 | `users/<id>/integrations/mcp/{servers,catalog}.json` | конфиг серверов + снимок каталога (через Store) |
 | `users/<id>/tasks/<task>/tool_audit.jsonl` | история вызовов инструментов (через Store) |
 | `run.sh` / `run.desktop` | запуск (без изменений / пересоздать при переносе) |
@@ -1302,7 +1355,7 @@ AI_9/dev/
 | `dev/Проверка.md` | чек-лист приёмки: 54 критерия + три сценария дня 20 |
 | `dev/migr_plan.md` + `migr_plan_*.md` | план-эталон и рабочие планы миграции |
 | `dev/migr_log.md` | журнал миграции + итоги ревизий |
-| `dev/tests_debug/*` | L2 (+`test_mcp.py`, `test_rag_*.py`), L3, L4 (+сценарии), гейт 33/33 |
+| `dev/tests_debug/*` | L2 (+`test_mcp.py`, `test_rag_*.py`), L3, L4 (+сценарии), гейт 43/43 |
 | `dev/logs_reports/stages/*` | транскрипты живых прогонов |
 
 ---
@@ -1323,8 +1376,9 @@ AI_9/dev/
    `core/tool_pipeline.py` + `pipeline_server.py` (пайплайн), мультисерверность
    (`config.py` + `agent.py` + `tool_routing.py`).
 7. **RAG** — `rag/` (config → corpus → chunking → embedding → index → retrieval → rerank
-   → cache → grounding → eval → compare → service) + DI-фасад в `Kod.py` + блок `[rag]`
-   в `prompt_builder.py` + `core/agent.py` (grounding).
+   → rewrite → cache → grounding → eval → compare → sources → citations → verify → service)
+   + DI-фасад в `Kod.py` + блок `[rag]` в `prompt_builder.py` + `core/agent.py`
+   (grounding, источники/цитаты, память задачи) + `memory/working.py` (goal/terms).
 8. **Финал** — прогон всех проверок (L1→L2→L3→L4→гейт), приёмка, живой прогон (реальный
    сервер + реальный LLM), запись итога в `dev/migr_log.md`, предложение коммита (коммит —
    только по явной команде пользователя).
@@ -1404,9 +1458,13 @@ AI_9/dev/
 - **Планировщик, пайплайн, мультисерверность**: фоновый worker 24/7 (не LLM); цепочка
   `search → summarize → saveToFile` с передачей данных; выбор и маршрутизация инструмента
   по `mcp.<server>.<tool>`, длинный флоу в одном запросе.
-- **RAG-модуль**: индексация корпуса (более 100 чанков / 9 документов), гибридный поиск
-  (BM25⊕dense → RRF → реранк → MMR), блок `[rag]` со ссылками `[doc_id#chunk_id]`,
-  grounding (`ok|partial|hallucination`) и одна авто-перегенерация в `strict`.
+- **RAG-модуль**: индексация корпуса (110 чанков / 9 документов), гибридный поиск
+  (BM25⊕dense → RRF → реранк → MMR → порог), query rewrite, блок `[rag]` со ссылками
+  `[doc_id#chunk_id]`, **источники** (`source`+`section`/`chunk_id`) и **дословные цитаты**
+  из чанков, режим «не знаю» при слабом контексте, grounding (`ok|partial|hallucination`)
+  и одна авто-перегенерация в `strict`; сравнение 4 режимов (no_rag/rag/rag_filter/
+  rag_filter_rewrite) на 10 контрольных вопросах; RAG в каждом обмене + память задачи
+  (цель/уточнения/ограничения/термины) + 2 длинных диалоговых сценария.
 - **Не скрипт, а вертикальный срез подсистемы**: `MCPGateway` (адаптер, не контролёр)
   → `MCPToolProvider` (нормализация во внутреннюю `ToolDescriptor`) → `ToolRegistry`
   (каталог + атомарный snapshot + персистентность через `Store`) → `ToolExecutor`
@@ -1419,7 +1477,7 @@ AI_9/dev/
   модель MCP не протекает в `core`; `MCPGateway` не знает о стадиях/профилях/памяти.
 - **Деградация, не падение**: недоступный сервер → FAILED/DEGRADED, REPL жив;
   недоступная Ollama → `HashingEmbedder`.
-- **Проверяемость**: L1 OK / L2 244 OK / L3 SMOKE OK / L4 SCENARIO OK, гейт **33/33**,
+- **Проверяемость**: L1 OK / L2 280 OK / L3 SMOKE OK / L4 SCENARIO OK, гейт **43/43**,
   приёмка **54/54** — без живого ключа и сети; живой прогон (реальный HTTP-сервер +
   реальный LLM) — отдельно.
 - **Заделы с зарезервированными местами**: `ToolMemoryPolicy`, `ToolPromptPolicy`/resources,

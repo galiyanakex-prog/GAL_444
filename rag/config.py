@@ -73,6 +73,11 @@ class RetrievalConfig:
     mode: str = "hybrid"                # "bm25" | "dense" | "hybrid"
     candidate_k: int = 50
     final_k: int = 5
+    # Порог отсечения нерелевантных результатов (этап 8, часть 2 Задание.txt).
+    # Скор — нормированный RRF гибрида (0..~0.033); 0.0 = порог выключен.
+    # Значение подобрано замером: на golden-датасете отсекает «хвост», не роняя
+    # hit-rate@5 (см. migr_log.md, этап 8).
+    threshold: float = 0.0
     rrf_k: int = 60
     # Веса RRF по надёжности ретриверов (этап 7). Dense (bi-encoder, bge-m3) —
     # основной ретривер по модели куратора (N5_audio: «bi-encoder Top-20»), BM25 —
@@ -118,6 +123,13 @@ class BudgetConfig:
 
 
 @dataclass(frozen=True)
+class UnknownConfig:
+    """Режим «не знаю» (часть 3 Задание.txt): при слабом контексте — уточнение."""
+    enabled: bool = True
+    message: str = "В источниках нет ответа на этот вопрос. Уточните, пожалуйста, что именно нужно."
+
+
+@dataclass(frozen=True)
 class RagConfig:
     corpus: CorpusConfig = field(default_factory=CorpusConfig)
     chunking: ChunkingConfig = field(default_factory=ChunkingConfig)
@@ -127,6 +139,7 @@ class RagConfig:
     cache: CacheConfig = field(default_factory=CacheConfig)
     grounding: GroundingConfig = field(default_factory=GroundingConfig)
     budget: BudgetConfig = field(default_factory=BudgetConfig)
+    unknown: UnknownConfig = field(default_factory=UnknownConfig)
     index_dir: str = "rag/index"
     enabled: bool = False               # RAG выключен по умолчанию
 
@@ -211,6 +224,7 @@ SECTION_CLASSES = {
     "cache": CacheConfig,
     "grounding": GroundingConfig,
     "budget": BudgetConfig,
+    "unknown": UnknownConfig,
     "bm25": Bm25Config,
 }
 
