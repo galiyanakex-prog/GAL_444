@@ -4,14 +4,14 @@
 
 | Вопрос | verdict | Источники | Цитаты | Смысл=цитаты | Длина |
 |---|---|---|---|---|---|
-| c01 | partial | 5 | 5 | ✅ | 1535 |
-| c02 | ok | 5 | 4 | ✅ | 1453 |
-| c03 | partial | 5 | 5 | — | 2254 |
-| c04 | hallucination | 5 | 5 | — | 1449 |
-| c05 | partial | 4 | 5 | — | 3689 |
-| c06 | partial | 5 | 5 | ✅ | 1272 |
-| c07 | partial | 5 | 5 | ✅ | 1957 |
-| c08 | partial | 4 | 5 | ✅ | 2268 |
-| c09 | partial | 2 | 1 | ✅ | 82 |
-| c10 | hallucination | 5 | 3 | — | 888 |
+| c01 | hallucination | 5 | 5 | — | 1559 |
+| c02 | partial | 5 | 5 | ✅ | 2305 |
+| c03 | partial | 5 | 2 | ✅ | 1002 |
+| c04 | hallucination | 5 | 5 | — | 1498 |
+| c05 | partial | 5 | 5 | — | 3694 |
+| c06 | partial | 5 | 2 | ✅ | 521 |
+| c07 | partial | 5 | 5 | ✅ | 3696 |
+| c08 | hallucination | 4 | 4 | — | 1630 |
+| c09 | partial | 2 | 1 | ✅ | 200 |
+| c10 | partial | 5 | 2 | ✅ | 781 |
 

@@ -674,6 +674,9 @@ def _build_rag_config(cli_args):
         patch["retrieval"] = dataclasses.replace(
             patch.get("retrieval", cfg.retrieval),
             multi_query=(cli_args.rag_rewrite == "llm"))
+        # Флаг имеет приоритет над конфигом: фиксируем режим в rewrite-секции.
+        patch["rewrite"] = dataclasses.replace(
+            cfg.rewrite, enabled=True, mode=cli_args.rag_rewrite)
     if cli_args.rag_multi_query:
         patch["retrieval"] = dataclasses.replace(
             patch.get("retrieval", cfg.retrieval), multi_query=True)

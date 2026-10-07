@@ -71,6 +71,10 @@
     "enabled": true,
     "message": "В источниках нет ответа на этот вопрос. Уточните, пожалуйста, что именно нужно."
   },
+  "rewrite": {
+    "enabled": false,
+    "mode": "heuristic"
+  },
   "budget": {
     "max_rag_tokens": 1400
   },

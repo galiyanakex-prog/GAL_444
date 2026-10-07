@@ -298,3 +298,7 @@
 [09:10:23] [RAG] grounding: verdict=partial coverage=0.25 ссылок=0 чисел вне=0
 [09:14:47] [RAG] grounding: verdict=partial coverage=0.25 ссылок=0 чисел вне=0
 [10:16:45] [RAG] grounding: verdict=partial coverage=0.25 ссылок=0 чисел вне=0
+[09:11:50] [RAG] grounding: verdict=partial coverage=0.25 ссылок=0 чисел вне=0
+[09:43:32] [RAG] grounding: verdict=hallucination coverage=0.476 ссылок=5 чисел вне=3
+[09:43:43] [RAG] grounding: verdict=hallucination coverage=0.421 ссылок=4 чисел вне=20
+[10:08:10] [RAG] grounding: verdict=partial coverage=0.25 ссылок=0 чисел вне=0
