@@ -302,3 +302,34 @@
 [09:43:32] [RAG] grounding: verdict=hallucination coverage=0.476 ссылок=5 чисел вне=3
 [09:43:43] [RAG] grounding: verdict=hallucination coverage=0.421 ссылок=4 чисел вне=20
 [10:08:10] [RAG] grounding: verdict=partial coverage=0.25 ссылок=0 чисел вне=0
+[11:48:35] [RAG] grounding: verdict=ok coverage=0.44 ссылок=5 чисел вне=0
+[12:10:10] [Хранилище] profile «default» = JSON в SQLite (таблица profiles, user_id=demo16)
+[12:10:10] [Память] profile «default» ← ['id', 'name', 'style', 'constraints', 'context'] → /home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/users/demo16/profiles/default.json (JSON в SQLite)
+[12:10:10] [Память] remember(profile) → profile.json (['id', 'name', 'style', 'constraints', 'context'])
+[12:10:10] [Память] working ← ['description'] → /home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/users/demo16/tasks/Основная_задача/working_memory.json
+[12:10:10] [Память] remember(working) → working_memory.json ['description']
+[12:10:10] [Память] long_term ← ['tasks'] → /home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/users/demo16/long_term_memory.json
+[12:10:10] [Память] remember(long_term) → long_term_memory.json ['tasks']
+[12:10:10] [Агент] Пользователь demo16 инициализирован (интервью пройдено)
+[12:10:10] [Память] working ← ['lifecycle_summary'] → /home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/users/demo16/tasks/Основная_задача/working_memory.json
+[12:10:10] [Память] remember(working) → working_memory.json ['lifecycle_summary']
+[12:13:55] [Память] short_term ← M1 (parent=None) → /home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/users/demo16/tasks/Основная_задача/sessions/20261007_121355/session.json
+[12:14:03] [Память] short_term ← M2 (parent=M1) → /home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/users/demo16/tasks/Основная_задача/sessions/20261007_121355/session.json
+[12:14:03] [Агент] M1: ответ получен (доставка: ['invariants', 'long_term', 'profile', 'short_term', 'working'])
+[12:14:03] [Память] short_term ← M3 (parent=M2) → /home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/users/demo16/tasks/Основная_задача/sessions/20261007_121355/session.json
+[12:14:22] [Память] short_term ← M4 (parent=M3) → /home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/users/demo16/tasks/Основная_задача/sessions/20261007_121355/session.json
+[12:14:22] [Агент] M2: ответ получен (доставка: ['invariants', 'long_term', 'profile', 'short_term', 'working'])
+[12:14:22] [Память] short_term ← M5 (parent=M4) → /home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/users/demo16/tasks/Основная_задача/sessions/20261007_121355/session.json
+[12:14:43] [Память] short_term ← M6 (parent=M5) → /home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/users/demo16/tasks/Основная_задача/sessions/20261007_121355/session.json
+[12:14:43] [Агент] M3: ответ получен (доставка: ['invariants', 'long_term', 'profile', 'short_term', 'working'])
+[12:14:43] [Память] short_term ← M7 (parent=M6) → /home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/users/demo16/tasks/Основная_задача/sessions/20261007_121355/session.json
+[12:14:47] [Память] short_term ← M8 (parent=M7) → /home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/users/demo16/tasks/Основная_задача/sessions/20261007_121355/session.json
+[12:14:47] [Агент] M4: ответ получен (доставка: ['invariants', 'long_term', 'profile', 'short_term', 'working'])
+[12:14:47] [Память] working ← ['lifecycle_summary'] → /home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/users/demo16/tasks/Основная_задача/working_memory.json
+[12:14:47] [Память] remember(working) → working_memory.json ['lifecycle_summary']
+[12:15:03] [Память] working ← ['lifecycle_summary'] → /home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/users/demo16/tasks/Основная_задача/working_memory.json
+[12:15:03] [Память] remember(working) → working_memory.json ['lifecycle_summary']
+[12:16:46] [Память] working ← ['lifecycle_summary'] → /home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/users/demo16/tasks/Основная_задача/working_memory.json
+[12:16:46] [Память] remember(working) → working_memory.json ['lifecycle_summary']
+[12:16:56] [Память] working ← ['lifecycle_summary'] → /home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/users/demo16/tasks/Основная_задача/working_memory.json
+[12:16:56] [Память] remember(working) → working_memory.json ['lifecycle_summary']

@@ -1067,10 +1067,9 @@ bash
 # Через обёртку (активирует venv недели AI_9, работает из любого каталога)
 ./run.sh                     # интерактивный REPL — спросит user_id
 ./run.sh --user alice        # сразу идентификация alice
-./run.sh --mock              # MockClient: детерминированные ответы, ключ не нужен
 
-# Напрямую
-python Kod.py --mock --user alice
+# Напрямую (живой LLM RouterAI, ключ из .env)
+python Kod.py --user alice
 
 # Персонализация
 ./run.sh --user alice --profile chemist    # активный профиль на старте
@@ -1162,7 +1161,7 @@ retry на HTTP 429 с задержками 2 → 4 → 8 сек, таймаут
 | Диалоги | `API_KEY=test-key python dev/tests_debug/dialog_runner.py` | DIALOG OK, exit 0 (2 длинных сценария) |
 | Интеграция | `timeout 60 python Kod.py --mcp-probe` (реальный HTTP-сервер) | READY → 4 тула (1 `time` + 3 `weather`) → DISCONNECTED, exit 0 (не гейт — живой прогон) |
 | Живой tool-use | `printf 'который час в Москве?\n/exit\n' \| python Kod.py --user u --mcp` | LLM вызывает `mcp.time.get_time` → ответ (не гейт — живой прогон) |
-| Живой RAG | `env -u API_KEY python Kod.py --rag-ask "…"` / `--rag-eval` / `--rag-verify` | ответ + источники + цитаты; hit-rate@5 = 0.8824; источники/цитаты 10/10 (не гейт — живой прогон) |
+| Живой RAG | `python Kod.py --rag-ask "…"` / `--rag-eval` / `--rag-verify` (ключ из `.env`) | ответ + источники + цитаты; hit-rate@5 = 0.8824; источники/цитаты 10/10 (не гейт — живой прогон) |
 
 **Состав тестовых модулей:**
 
