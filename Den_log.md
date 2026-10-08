@@ -333,3 +333,23 @@
 [12:16:46] [Память] remember(working) → working_memory.json ['lifecycle_summary']
 [12:16:56] [Память] working ← ['lifecycle_summary'] → /home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/users/demo16/tasks/Основная_задача/working_memory.json
 [12:16:56] [Память] remember(working) → working_memory.json ['lifecycle_summary']
+[16:26:24] [Хранилище] profile «default» = JSON в SQLite (таблица profiles, user_id=demo16)
+[16:26:24] [Память] profile «default» ← ['id', 'name', 'style', 'constraints', 'context'] → dev/tests_debug/.tmp/manual_check/demo16/profiles/default.json (JSON в SQLite)
+[16:26:24] [Память] remember(profile) → profile.json (['id', 'name', 'style', 'constraints', 'context'])
+[16:26:24] [Память] working ← ['description'] → dev/tests_debug/.tmp/manual_check/demo16/tasks/Основная_задача/working_memory.json
+[16:26:24] [Память] remember(working) → working_memory.json ['description']
+[16:26:24] [Память] long_term ← ['tasks'] → dev/tests_debug/.tmp/manual_check/demo16/long_term_memory.json
+[16:26:24] [Память] remember(long_term) → long_term_memory.json ['tasks']
+[16:26:24] [Агент] Пользователь demo16 инициализирован (интервью пройдено)
+[16:26:24] [Память] working ← ['lifecycle_summary'] → dev/tests_debug/.tmp/manual_check/demo16/tasks/Основная_задача/working_memory.json
+[16:26:24] [Память] remember(working) → working_memory.json ['lifecycle_summary']
+[16:26:33] [Хранилище] profile «default» = JSON в SQLite (таблица profiles, user_id=demo16)
+[16:26:33] [Память] profile «default» ← ['id', 'name', 'style', 'constraints', 'context'] → dev/tests_debug/.tmp/manual_check/demo16/profiles/default.json (JSON в SQLite)
+[16:26:33] [Память] remember(profile) → profile.json (['id', 'name', 'style', 'constraints', 'context'])
+[16:26:33] [Память] working ← ['description'] → dev/tests_debug/.tmp/manual_check/demo16/tasks/Основная_задача/working_memory.json
+[16:26:33] [Память] remember(working) → working_memory.json ['description']
+[16:26:33] [Память] long_term ← ['tasks'] → dev/tests_debug/.tmp/manual_check/demo16/long_term_memory.json
+[16:26:33] [Память] remember(long_term) → long_term_memory.json ['tasks']
+[16:26:33] [Агент] Пользователь demo16 инициализирован (интервью пройдено)
+[16:26:33] [Память] working ← ['lifecycle_summary'] → dev/tests_debug/.tmp/manual_check/demo16/tasks/Основная_задача/working_memory.json
+[16:26:33] [Память] remember(working) → working_memory.json ['lifecycle_summary']
