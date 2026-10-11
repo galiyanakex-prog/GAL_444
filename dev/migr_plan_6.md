@@ -37,14 +37,19 @@
 ### ШАГ 6.2 — Команда сравнения
 
 ```bash
-.venv/bin/python -m rag.compare \
-  --queries rag/datasets/queries.jsonl \
-  --modes cloud,local --k 5 --repeat 3 \
-  --report dev/logs_reports/stages/rag_local_compare.md
+.venv/bin/python Kod.py --rag-gen-compare \
+  --gen-modes cloud,local --repeat 3 \
+  --gen-report dev/logs_reports/stages/rag_local_compare.md
 ```
 
-> `--modes cloud,local` — расширение `compare_answers` (этап 6): `cloud` = облачный `llm`,
-> `local` = локальный `llm` из `ModelRegistry`; различается **только** генератор.
+> **Уточнение реализации (этап 6).** Клиентов строит `Kod.py` (граница §5: `rag/`
+> не импортирует `core/`), поэтому сравнение генераторов запускается из `Kod.py`,
+> а не из `python -m rag.compare`. В `rag/compare.py` добавлены
+> `compare_generators(cfg, queries, generators, k, repeat)` и
+> `render_generator_report(result)`; `generators` — dict `{имя: callable(messages)->str}`
+> (DI). `cloud` = облачный `llm`, `local` = локальный `llm` из `ModelRegistry`;
+> различается **только** генератор. `python -m rag.compare --modes cloud,local`
+> печатает подсказку и не запускает прогон (клиентов там нет).
 
 ### ШАГ 6.3 — Метрики (три оси)
 
@@ -79,7 +84,9 @@ feat(rag): сравнение локальной и облачной модел�
 
 ## Выход этапа
 
-- `rag/compare.py` — режимы `cloud`/`local`;
+- `rag/compare.py` — `compare_generators` + `render_generator_report` (оси cloud/local);
+- `Kod.py` — флаги `--rag-gen-compare` / `--gen-modes` / `--repeat` / `--gen-report`;
+- `dev/tests_debug/unit/test_rag_gen_compare.py` — юниты (10);
 - `dev/logs_reports/stages/rag_local_compare.md` — отчёт (три оси + вердикт);
 - запись «Этап 6» в `dev/migr_log.md`.
 

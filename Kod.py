@@ -173,6 +173,14 @@ parser.add_argument("--rag-eval", action="store_true",
                     help="One-shot: метрики качества retrieval на golden-датасете и выйти.")
 parser.add_argument("--rag-compare", action="store_true",
                     help="One-shot: сравнить стратегии чанкинга × режимы ретривера и выйти.")
+parser.add_argument("--rag-gen-compare", action="store_true",
+                    help="One-shot: сравнить локальную и облачную генерацию RAG (этап 6).")
+parser.add_argument("--gen-modes", type=str, default="cloud,local",
+                    help="Генераторы для --rag-gen-compare (cloud,local).")
+parser.add_argument("--repeat", type=int, default=1,
+                    help="Повторов на вопрос для --rag-gen-compare (ось стабильности).")
+parser.add_argument("--gen-report", type=str, default=None, metavar="FILE",
+                    help="Путь отчёта --rag-gen-compare (по умолчанию stages/rag_local_compare.md).")
 parser.add_argument("--rag-mode", type=str, default=None,
                     choices=("bm25", "dense", "hybrid"),
                     help="Режим ретривера (по умолчанию из rag/config.json: hybrid).")
@@ -969,6 +977,58 @@ def run_rag_compare(cli_args) -> int:
     report = service.compare(strategies=strategies, modes=modes, queries=queries,
                              k=cfg.retrieval.final_k)
     print(render_report(report))
+    return 0
+
+
+def run_rag_gen_compare(cli_args) -> int:
+    """One-shot: сравнить локальную и облачную генерацию RAG (этап 6, G2).
+
+    Один датасет, один retrieval, различается только генератор. Клиентов строит
+    Kod.py (граница §5: rag/ не импортирует core/). Отчёт — три оси + вердикт.
+    """
+    from rag.compare import compare_generators, render_generator_report
+
+    cfg = _build_rag_config(cli_args)
+    service = _make_rag_service(cfg)
+    if not service.stats().get("n_chunks"):
+        print("[RAG] Индекс пуст — сначала: python Kod.py --rag-ingest", file=sys.stderr)
+        return 1
+    modes = [m.strip() for m in cli_args.gen_modes.split(",") if m.strip()]
+    generators = {}
+    for mode in modes:
+        if mode == "cloud":
+            client, _ = _build_gen_client(
+                dataclasses.replace(cfg, generation=dataclasses.replace(
+                    cfg.generation, provider="cloud")), mock=cli_args.mock)
+        elif mode == "local":
+            client, _ = _build_gen_client(
+                dataclasses.replace(cfg, generation=dataclasses.replace(
+                    cfg.generation, provider="lmstudio")), mock=cli_args.mock)
+        else:
+            print(f"[RAG] Неизвестный генератор «{mode}» (cloud|local).", file=sys.stderr)
+            return 2
+        if client is None:
+            print(f"[RAG] Генератор «{mode}» недоступен (нет ключа/сервиса) — пропуск.",
+                  file=sys.stderr)
+            continue
+        generators[mode] = client.complete
+    if not generators:
+        print("[RAG] Ни один генератор не собран — сравнение невозможно.", file=sys.stderr)
+        return 1
+    dataset = os.path.join(BASE_DIR, "rag", "datasets", "queries.jsonl")
+    queries = [q for q in _load_queries(dataset) if q.get("id", "").startswith("c")][:10]
+    print(f"[RAG] Сравнение генераторов {list(generators)} на {len(queries)} вопросах, "
+          f"повторов={cli_args.repeat}. Локальная генерация на CPU — это долго.")
+    result = compare_generators(cfg, queries, generators, k=cfg.retrieval.final_k,
+                                repeat=cli_args.repeat)
+    text = render_generator_report(result)
+    report_path = cli_args.gen_report or os.path.join(
+        BASE_DIR, "dev", "logs_reports", "stages", "rag_local_compare.md")
+    os.makedirs(os.path.dirname(report_path), exist_ok=True)
+    with open(report_path, "w", encoding="utf-8") as handle:
+        handle.write(text)
+    print(text)
+    print(f"\n[RAG] Отчёт записан: {report_path}")
     return 0
 
 
@@ -1870,7 +1930,8 @@ def main():
                 (args.rag_ask is not None, run_rag_ask),
                 (args.rag_verify, run_rag_verify),
                 (args.rag_eval, run_rag_eval),
-                (args.rag_compare, run_rag_compare)]
+                (args.rag_compare, run_rag_compare),
+                (args.rag_gen_compare, run_rag_gen_compare)]
     if any(flag for flag, _ in rag_runs):
         sys.exit(max((run(args) for flag, run in rag_runs if flag), default=0))
 

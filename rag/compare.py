@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import dataclasses
+import re
 from pathlib import Path
 
 from rag.config import RagConfig
@@ -177,6 +178,222 @@ def render_answer_report(result, k: int = 5) -> str:
 
 
 
+# ---------------------------------------------------------------------------
+# Сравнение ГЕНЕРАТОРОВ (часть 3, этап 6): локальная vs облачная модель.
+# Отличается ТОЛЬКО генератор (retrieval и индекс — общие). Три оси: качество,
+# скорость, стабильность ответов. Генераторы приходят как DI (callable), чтобы
+# rag/ не импортировал core/ (граница §5): клиентов строит Kod.py.
+# ---------------------------------------------------------------------------
+GENERATOR_MODES = ("cloud", "local")
+
+_CITATION_RE = re.compile(r"\[([^\[\]]+)\]")
+
+
+def _citations(text: str) -> list:
+    """Ссылки вида [doc_id#chunk_id] в тексте ответа (модель может дублировать doc_id)."""
+    return [m for m in _CITATION_RE.findall(text or "") if "#" in m]
+
+
+def _citations_valid(text: str, hits: list) -> tuple:
+    """(всего ссылок, валидных). Валидна, если указывает на doc_id/chunk_id выдачи."""
+    cites = _citations(text)
+    if not cites:
+        return 0, 0
+    chunk_ids = {h.chunk_id for h in hits}
+    doc_ids = {h.doc_id for h in hits}
+    valid = sum(1 for c in cites
+                if any(cid in c for cid in chunk_ids) or any(did in c for did in doc_ids))
+    return len(cites), valid
+
+
+def compare_generators(cfg, queries, generators, k: int = 5, repeat: int = 1,
+                       threshold: float = None) -> dict:
+    """Прогнать контрольные вопросы разными генераторами (часть 3, этап 6).
+
+    `generators` — dict {имя: callable(messages)->str} (DI). Различается только
+    генератор: retrieval/индекс общие. `repeat` — число повторов на вопрос (для
+    оси «стабильность»). Возвращает {"rows", "summary", "divergences", "verdict"}.
+    """
+    from rag.service import RagService
+    query_list = queries if isinstance(queries, list) else load_queries(queries)
+    repeat = max(1, int(repeat))
+    rows = []
+    for name, llm in generators.items():
+        svc = RagService(cfg, llm=llm)
+        for q in query_list:
+            for run in range(repeat):
+                ans = svc.answer(q["query"], use_rag=True, k=k, threshold=threshold)
+                text = ans.text or ""
+                must = q.get("must_contain", [])
+                hit_must = sum(1 for m in must if m.lower() in text.lower())
+                n_cites, n_valid = _citations_valid(text, list(ans.hits))
+                error = (not text) or ("(ошибка вызова LLM)" in text) \
+                    or ("(LLM недоступен" in text)
+                rows.append({
+                    "id": q.get("id", ""), "mode": name, "run": run,
+                    "must_hit": hit_must, "must_total": len(must),
+                    "n_sources": len(ans.sources), "has_sources": bool(ans.sources),
+                    "n_citations": n_cites, "n_citations_valid": n_valid,
+                    "verdict": ans.verdict, "answer_len": len(text),
+                    "latency_ms": ans.latency_ms, "error": error,
+                })
+    summary = _generator_summary(rows)
+    divergences = _generator_divergences(rows)
+    verdict = _generator_verdict(summary)
+    return {"rows": rows, "summary": summary, "divergences": divergences,
+            "verdict": verdict, "k": k, "repeat": repeat}
+
+
+def _median(values: list) -> float:
+    if not values:
+        return 0.0
+    ordered = sorted(values)
+    mid = len(ordered) // 2
+    if len(ordered) % 2:
+        return round(ordered[mid], 1)
+    return round((ordered[mid - 1] + ordered[mid]) / 2, 1)
+
+
+def _p95(values: list) -> float:
+    if not values:
+        return 0.0
+    ordered = sorted(values)
+    idx = min(len(ordered) - 1, int(round(0.95 * (len(ordered) - 1))))
+    return round(ordered[idx], 1)
+
+
+def _std(values: list) -> float:
+    n = len(values)
+    if not n:
+        return 0.0
+    mean = sum(values) / n
+    return (sum((v - mean) ** 2 for v in values) / n) ** 0.5
+
+
+def _count(values) -> dict:
+    out = {}
+    for v in values:
+        out[v] = out.get(v, 0) + 1
+    return out
+
+
+def _generator_summary(rows) -> dict:
+    """Сводка по трём осям для каждого генератора."""
+    modes = list(dict.fromkeys(r["mode"] for r in rows))
+    out = {}
+    for mode in modes:
+        group = [r for r in rows if r["mode"] == mode]
+        n = len(group)
+        lat = [r["latency_ms"] for r in group]
+        must = sum(r["must_hit"] for r in group)
+        total = sum(r["must_total"] for r in group)
+        by_id = {}
+        for r in group:
+            by_id.setdefault(r["id"], []).append(r["must_hit"])
+        consistent = sum(1 for v in by_id.values() if len(set(v)) == 1)
+        total_lat = sum(lat)
+        out[mode] = {
+            "n": n,
+            "must_ratio": round(must / total, 4) if total else 0.0,
+            "sources_ok": sum(1 for r in group if r["has_sources"]),
+            "citations": sum(r["n_citations"] for r in group),
+            "citations_valid": sum(r["n_citations_valid"] for r in group),
+            "verdicts": _count(r["verdict"] for r in group),
+            "latency_median": _median(lat),
+            "latency_p95": _p95(lat),
+            "latency_std": round(_std(lat), 1),
+            "tokens_per_s": round((sum(r["answer_len"] for r in group) / 4)
+                                  / (total_lat / 1000), 2) if total_lat else 0.0,
+            "errors": sum(1 for r in group if r["error"]),
+            "empty": sum(1 for r in group if not r["answer_len"]),
+            "consistent": consistent, "questions": len(by_id),
+        }
+    return out
+
+
+def _generator_divergences(rows, limit: int = 3) -> list:
+    """Вопросы, где генераторы разошлись по наличию источников/попаданию must_contain."""
+    by_id = {}
+    for r in rows:
+        by_id.setdefault(r["id"], {}).setdefault(r["mode"], []).append(r)
+    out = []
+    for qid, modes in by_id.items():
+        if len(modes) < 2:
+            continue
+        sig = {m: (any(r["has_sources"] for r in g), max(r["must_hit"] for r in g))
+               for m, g in modes.items()}
+        if len(set(sig.values())) > 1:
+            detail = "; ".join(
+                f"{m}: ист.={'да' if v[0] else 'нет'}, must={v[1]}" for m, v in sig.items())
+            out.append({"id": qid, "detail": detail})
+        if len(out) >= limit:
+            break
+    return out
+
+
+def _generator_verdict(summary) -> str:
+    parts = []
+    for mode, s in summary.items():
+        parts.append(
+            f"{mode}: must_contain {s['must_ratio']}, источники {s['sources_ok']}/{s['n']}, "
+            f"медиана {s['latency_median']} мс / p95 {s['latency_p95']} мс, "
+            f"ошибок {s['errors']}, согласованность {s['consistent']}/{s['questions']}")
+    if "cloud" in summary and "local" in summary:
+        c, l = summary["cloud"], summary["local"]
+        parts.append("Локальная не хуже облачной по must_contain."
+                     if l["must_ratio"] >= c["must_ratio"]
+                     else "Локальная уступает облачной по must_contain.")
+        if c["latency_median"]:
+            parts.append(f"Локальная медленнее в "
+                         f"{round(l['latency_median'] / c['latency_median'], 1)}× (медиана).")
+    return " · ".join(p for p in parts if p)
+
+
+def render_generator_report(result) -> str:
+    """Markdown-отчёт сравнения генераторов (три оси + вердикт + расхождения)."""
+    lines = ["# Сравнение локальной и облачной генерации RAG (этап 6, G2)", ""]
+    lines.append(f"k = {result['k']} · повторов на вопрос = {result['repeat']} · "
+                 f"вопросов = {len({r['id'] for r in result['rows']})}")
+    lines.append("")
+    lines.append("## Таблица «вопрос × генератор»")
+    lines.append("")
+    lines.append("| Вопрос | Генератор | must_contain | Источники | Ссылки (валид.) | "
+                 "verdict | Длина | Латентность, мс |")
+    lines.append("|---|---|---|---|---|---|---|---|")
+    for r in result["rows"]:
+        lines.append(
+            f"| {r['id']} | {r['mode']} | {r['must_hit']}/{r['must_total']} | "
+            f"{r['n_sources']} | {r['n_citations_valid']}/{r['n_citations']} | "
+            f"{r['verdict']} | {r['answer_len']} | {r['latency_ms']} |")
+    lines.append("")
+    lines.append("## Сводка по трём осям")
+    lines.append("")
+    lines.append("| Генератор | Качество: must_contain | Источники | Ссылки валид. | "
+                 "Скорость: медиана, мс | p95, мс | ток/с | Стабильность: ошибки | "
+                 "согласованность |")
+    lines.append("|---|---|---|---|---|---|---|---|---|")
+    for mode, s in result["summary"].items():
+        lines.append(
+            f"| {mode} | {s['must_ratio']} | {s['sources_ok']}/{s['n']} | "
+            f"{s['citations_valid']}/{s['citations']} | {s['latency_median']} | "
+            f"{s['latency_p95']} | {s['tokens_per_s']} | {s['errors']} | "
+            f"{s['consistent']}/{s['questions']} |")
+    lines.append("")
+    lines.append("## Вердикт")
+    lines.append("")
+    lines.append(result["verdict"])
+    lines.append("")
+    lines.append("## Разбор расхождений")
+    lines.append("")
+    if result["divergences"]:
+        for d in result["divergences"]:
+            lines.append(f"- **{d['id']}** — {d['detail']}")
+    else:
+        lines.append("Расхождений между генераторами не обнаружено.")
+    lines.append("")
+    return "\n".join(lines)
+
+
 def compare(cfg, strategies, modes, queries, k: int = 5) -> CompareReport:
     """Прогнать все конфигурации и вернуть CompareReport."""
     query_list = queries if isinstance(queries, list) else load_queries(queries)
@@ -321,6 +538,14 @@ def main(argv=None) -> int:
 
     cfg = RagConfig.default()
     modes = [m.strip() for m in args.modes.split(",") if m.strip()]
+
+    # Сравнение генераторов (этап 6): клиентов строит Kod.py (граница §5 —
+    # rag/ не импортирует core/). Здесь только подсказка.
+    if any(m in GENERATOR_MODES for m in modes):
+        print("Сравнение генераторов (cloud/local) запускается из Kod.py "
+              "(клиентов строит реестр):\n"
+              "  python Kod.py --rag-gen-compare --gen-modes cloud,local --repeat 3")
+        return 2
 
     # Режимы ответа (части 1–2) — отдельный отчёт сравнения ответов.
     if any(m in ANSWER_MODES for m in modes):

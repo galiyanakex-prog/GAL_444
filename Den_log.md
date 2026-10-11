@@ -451,3 +451,4 @@
 [00:07:27] [RAG] grounding: verdict=ok coverage=0.7 ссылок=2 чисел вне=0
 [00:07:27] [Память] working ← ['lifecycle_summary'] → /home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/users/localgen/tasks/Основная_задача/working_memory.json
 [00:07:27] [Память] remember(working) → working_memory.json ['lifecycle_summary']
+[00:42:51] [RAG] grounding: verdict=partial coverage=0.25 ссылок=0 чисел вне=0
