@@ -362,3 +362,6 @@
 [15:06:49] [RAG] grounding: verdict=partial coverage=0.25 ссылок=0 чисел вне=0
 [15:41:16] [RAG] grounding: verdict=partial coverage=0.25 ссылок=0 чисел вне=0
 [19:13:47] [RAG] grounding: verdict=partial coverage=0.25 ссылок=0 чисел вне=0
+[20:03:10] [Субагент] запущен id=Ответь_одним_словом_готово_1791738190 service=lmstudio model=lmstudio:Qwen2.5-Coder-3B-Instruct-Distill-Qwen3-Coder-Next-abliterated-Q6_K pid=136089
+[20:03:17] [Субагент] id=Ответь_одним_словом_готово_1791738190 статус=ok (7.28 с)
+[20:28:36] [RAG] grounding: verdict=partial coverage=0.25 ссылок=0 чисел вне=0

@@ -99,6 +99,15 @@ parser.add_argument("--model-list", action="store_true",
                     help="One-shot: напечатать реестр моделей и выйти.")
 parser.add_argument("--model-profile", type=str, default=None, metavar="NAME",
                     help="Профиль параметров модели (default / rag-strict / fast).")
+parser.add_argument("--oneshot", type=str, default=None, metavar="ЗАДАЧА",
+                    help="One-shot: один обмен → ответ → выход (субагенты, фасад).")
+parser.add_argument("--subagent-run", type=str, default=None, metavar="ЗАДАЧА",
+                    help="One-shot: запустить субагента на локальной LLM и выйти.")
+parser.add_argument("--subagent-service", type=str, default="lmstudio",
+                    choices=("lmstudio", "ollama"),
+                    help="Сервис для субагента (по умолчанию lmstudio).")
+parser.add_argument("--local-only", action="store_true",
+                    help="Запрет облачных моделей в этой сессии (и для субагентов).")
 parser.add_argument("--fresh", action="store_true",
                     help="Не восстанавливать прошлое состояние (новая сессия).")
 parser.add_argument("--log", type=str, default="Den_log.md",
@@ -1116,6 +1125,27 @@ def run_interview(agent: Agent, user_id: str):
     print(f"[Инициализация] Профиль и дерево users/{user_id}/ созданы.\n")
 
 
+# 9.0 One-shot обмен (Ревизия 8, этап 4): один запрос → ответ → выход ------------
+def run_oneshot(agent: Agent, user_id: str, task: str) -> int:
+    """Один обмен без REPL: используется субагентами и фасадом (этап 9).
+
+    Новый пользователь инициализируется без интервью (неинтерактивно). Ответ
+    печатается с подписью модели; код выхода 0 — ответ получен, 1 — нет.
+    """
+    profile_repo = agent.store.profile_repo
+    if not profile_repo.exists(user_id):
+        agent.initialize_user(user_id, name=user_id, answers={})
+    else:
+        agent.load_state(user_id)
+    print(model_banner(agent))
+    answer = agent.respond(task)
+    if answer is None:
+        print("[API] Ответ не получен.")
+        return 1
+    print(f"[{agent.model_label()}] Агент: {answer}")
+    return 0
+
+
 # 9.1 Модель/сервис (Ревизия 8, этап 3): отображение и команда /model ------------
 def model_banner(agent: Agent) -> str:
     """Баннер сессии: единая подпись модели (сервис/модель, локальность, квант)."""
@@ -1223,6 +1253,113 @@ def handle_model_command(agent: Agent, user_input: str):
           f"См. /model [current|list|use|status|profile]\n")
 
 
+# 9.2 Субагенты (Ревизия 8, этап 4): дочерние CLI-сессии на локальной LLM --------
+def _get_subagent_runner(agent: Agent):
+    """Ленивая сборка SubagentRunner (реестр берётся из агента)."""
+    from core.subagents import SubagentRunner
+    runner = getattr(agent, "subagent_runner", None)
+    if runner is None:
+        registry = getattr(agent, "model_registry", None)
+        runner = SubagentRunner(BASE_DIR, registry=registry, log=log_line)
+        agent.subagent_runner = runner
+    return runner
+
+
+def run_subagent(agent: Agent, task: str, service: str = "lmstudio",
+                 model: str = None, wait: bool = True):
+    """Запускает субагента и печатает сводку. Не трогает TaskStage основной задачи."""
+    from core.subagents import SubagentError
+    runner = _get_subagent_runner(agent)
+    try:
+        result = runner.run(task, service=service, model=model, wait=wait)
+    except SubagentError as error:
+        print(f"[Субагент] ⚠ {error}\n")
+        return None
+    print(f"[Субагент] id={result['id']}, сервис={result['service']}, "
+          f"модель={result['model']}, pid={result['pid']}")
+    if wait:
+        print(f"[Субагент] статус={result['status']} ({result['duration']} с), "
+              f"лог: {result['log']}")
+        if result["output"].strip():
+            print(result["output"].strip())
+    else:
+        print(f"[Субагент] запущен в фоне; лог: {result['log']}")
+    print()
+    return result
+
+
+def handle_subagent_command(agent: Agent, user_input: str):
+    """Диспетчер /subagent: run <задача> [--service …] [--model …] | list | log <id>."""
+    parts = user_input.split()
+    sub = parts[1] if len(parts) > 1 else "list"
+
+    if sub == "list":
+        runner = _get_subagent_runner(agent)
+        active = runner.list_active()
+        print(f"[Субагенты] Активных: {len(active)}; завершённых: {len(runner.history)}")
+        for item in active:
+            print(f"  * {item['id']} (pid {item['pid']})")
+        for item in runner.history[-5:]:
+            print(f"    {item['id']} | {item['status']} | {item['model']} | {item['log']}")
+        print()
+        return
+
+    if sub == "log":
+        if len(parts) < 3:
+            print("[Субагент] Укажите id: /subagent log <id>\n")
+            return
+        runner = _get_subagent_runner(agent)
+        target = next((h for h in runner.history if h["id"] == parts[2]), None)
+        if target is None:
+            print(f"[Субагент] id «{parts[2]}» не найден.\n")
+            return
+        try:
+            with open(target["log"], "r", encoding="utf-8") as handle:
+                print(handle.read())
+        except OSError as error:
+            print(f"[Субагент] ⚠ Не удалось прочитать лог: {error}\n")
+        return
+
+    if sub == "run":
+        rest = user_input.split(maxsplit=2)
+        if len(rest) < 3 or not rest[2].strip():
+            print("[Субагент] Укажите задачу: /subagent run <задача> "
+                  "[--service ollama|lmstudio] [--model <id>] [--async]\n")
+            return
+        tail = rest[2].strip()
+        service = "lmstudio"
+        model = None
+        wait = True
+        tokens = tail.split()
+        task_words = []
+        i = 0
+        while i < len(tokens):
+            if tokens[i] == "--service" and i + 1 < len(tokens):
+                service = tokens[i + 1]
+                i += 2
+            elif tokens[i] == "--model" and i + 1 < len(tokens):
+                model = tokens[i + 1]
+                i += 2
+            elif tokens[i] == "--async":
+                wait = False
+                i += 1
+            elif tokens[i] == "--wait":
+                wait = True
+                i += 1
+            else:
+                task_words.append(tokens[i])
+                i += 1
+        task = " ".join(task_words).strip()
+        if not task:
+            print("[Субагент] Пустая задача.\n")
+            return
+        run_subagent(agent, task, service=service, model=model, wait=wait)
+        return
+
+    print(f"[Субагент] Неизвестная подкоманда: {sub}. "
+          f"См. /subagent [run|list|log]\n")
+
+
 # 10. Печать справки ---------------------------------------------------------------
 def print_help():
     print("[Справка] Доступные команды:")
@@ -1279,6 +1416,10 @@ def print_help():
     print("  /model use <id>      — переключить модель/сервис в сессии")
     print("  /model status        — живой health-check сервисов (latency, версия)")
     print("  /model profile <name> — применить профиль параметров (default/rag-strict/fast)")
+    print("  /subagent run <задача> [--service ollama|lmstudio] [--model <id>] [--async]")
+    print("                       — поднять вспомогательную CLI-сессию на локальной LLM")
+    print("  /subagent list       — активные/завершённые субагенты и их логи")
+    print("  /subagent log <id>   — показать лог субагента (с его подписью модели)")
     print("  /help                — эта справка")
     print("  /exit                — завершить и сохранить состояние")
     print()
@@ -1600,6 +1741,23 @@ def main():
             print(f"  {marker} {spec.id}  ({where}{role})")
         sys.exit(0)
 
+    # One-shot: запустить субагента на локальной LLM и выйти (Ревизия 8, этап 4).
+    if args.subagent_run is not None:
+        from core.subagents import SubagentRunner, SubagentError
+        registry = ModelRegistry(MODELS_PATH, log=log_line)
+        runner = SubagentRunner(BASE_DIR, registry=registry, log=log_line)
+        try:
+            result = runner.run(args.subagent_run, service=args.subagent_service)
+        except SubagentError as error:
+            print(f"[Субагент] ⚠ {error}")
+            sys.exit(2)
+        print(f"[Субагент] id={result['id']} сервис={result['service']} "
+              f"модель={result['model']} pid={result['pid']}")
+        print(f"[Субагент] статус={result['status']} ({result['duration']} с), "
+              f"лог: {result['log']}")
+        print(result["output"].strip())
+        sys.exit(0 if result["status"] == "ok" else 1)
+
     # One-shot прогоны RAG (День 21): индексация / поиск / метрики / сравнение.
     # REPL не запускается, LLM не тратится. Заданные прогоны идут по порядку
     # (индексация раньше метрик), код выхода — худший из кодов прогонов.
@@ -1621,8 +1779,26 @@ def main():
                         rag_enabled=args.rag, rag_config=rag_cfg,
                         model_id=args.model)
 
+    # Флаг --local-only (Ревизия 8, этап 4): запрет облачных моделей в сессии.
+    # Если текущая модель облачная — переключаемся на локальную (lmstudio).
+    if args.local_only:
+        registry = getattr(agent, "model_registry", None)
+        if registry is not None and not registry.current().local:
+            local_spec = next((s for s in registry.list(role="chat") if s.local), None)
+            if local_spec is not None:
+                agent.set_model(registry.build(local_spec), label=local_spec.display())
+                registry.current_id = local_spec.id
+                print(f"[Модель] --local-only: переключено на {local_spec.display()}")
+            else:
+                print("[Модель] ⚠ --local-only: локальных chat-моделей нет в реестре.")
+
     # Накопительный трекер токенов сессии (локальная оценка).
     exchange_tracker = {"n": 0, "tokens": 0, "cost": 0.0}
+
+    # One-shot обмен (Ревизия 8, этап 4): один запрос → ответ → выход. REPL и
+    # интервью не запускаются; используется субагентами и фасадом (этап 9).
+    if args.oneshot is not None:
+        sys.exit(run_oneshot(agent, user_id or "oneshot", args.oneshot))
 
     if user_id is None:
         user_id = input("Идентификатор пользователя (user_id): ").strip()
@@ -1851,12 +2027,29 @@ def main():
                 if command == "/model":
                     handle_model_command(agent, user_input)
                     continue
+                if command == "/subagent":
+                    handle_subagent_command(agent, user_input)
+                    continue
                 if command == "/exit":
                     stop_scheduler(agent)
                     agent.save_state()
                     print("[Выход] Состояние сохранено. До встречи!")
                     break
                 print(f"[Команда] Неизвестная команда: {command}. См. /help\n")
+                continue
+
+            # Триггер-фраза «сделай локально в <service>: <задача>» (этап 4):
+            # детерминированный анализатор → подтверждение → субагент.
+            from core.subagents import detect_local_subagent_request
+            detected = detect_local_subagent_request(user_input)
+            if detected is not None:
+                service, task = detected
+                confirm = input(f"[Субагент] Запустить локально в «{service}»: "
+                                f"«{task}»? [y/N]: ").strip().lower()
+                if confirm in ("y", "yes", "д", "да"):
+                    run_subagent(agent, task, service=service)
+                else:
+                    print("[Субагент] Отменено.\n")
                 continue
 
             # Обычное сообщение → полный цикл агента.

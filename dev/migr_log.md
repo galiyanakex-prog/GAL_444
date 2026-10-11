@@ -331,3 +331,61 @@
 
 - ✅ (все пункты зелёные; переключение не трогает `TaskStage`/память/`deliver`;
   без `--model` промпт байт-в-байт прежний)
+
+---
+
+## Этап 4 — Субагенты на локальных LLM (цель: L3)
+
+- Статус: ✅ завершён (2026-10-11)
+- Было: вспомогательных CLI-сессий нет; фразы «сделай локально в …» не
+  распознавались; `Kod.py` умел только REPL.
+- Стало: `core/subagents.py` (`SubagentRunner` + детерминированный анализатор
+  фразы); флаг `--oneshot` (один обмен → ответ → выход); флаги `--subagent-run`,
+  `--subagent-service`, `--local-only`; команда `/subagent run|list|log`;
+  триггер-фраза «сделай локально в `<service>`: …» с подтверждением.
+
+### Живой прогон
+
+- Триггер-фраза «сделай локально в LM Studio: …» → подтверждение → субагент
+  отработал на боевой модели (статус `ok`, ~6,5 с).
+- Второй субагент через `/subagent run … --service lmstudio` — отдельная задача,
+  статус `ok` (~6,4 с).
+- Логи субагентов несут их собственную подпись модели
+  (`model=lmstudio/…abliterated-Q6_K`); транскрипт `stages/local_llm_subagent.md`.
+
+### Офлайн без сети
+
+- ✅ подтверждено: субагент запускается только на локальном сервисе
+  (`lmstudio`/`ollama`); облачный сервис при `local_only` → отказ до запуска.
+
+### Метрики
+
+- Латентность субагента (короткая задача, CPU): ~6,5 с.
+- `/subagent list` токенов LLM не тратит.
+
+### Регрессия
+
+- `unit_runner.py` — **321 OK, 0 FAIL** (было 310; +10 новых `test_subagents.py`);
+- `smoke.py` — SMOKE OK; `scenario.py` — SCENARIO OK;
+- `check_acceptance.sh` — **43 из 43**; `pytest -q` — **322 passed**;
+- `git diff --stat requirements.txt` — пусто (зависимостей не добавляли).
+
+### Артефакты
+
+- `core/subagents.py` — создан (`SubagentRunner`, `detect_local_subagent_request`);
+- `Kod.py` — `--oneshot`, `--subagent-run`, `--subagent-service`, `--local-only`,
+  `run_oneshot`, `run_subagent`, `handle_subagent_command`, триггер-фраза;
+- `dev/tests_debug/unit/test_subagents.py` — создан (10 тестов);
+- `dev/logs_reports/stages/local_llm_subagent.md` — транскрипт живого прогона.
+
+### Коммит
+
+- Предложен оператору (текст — в ШАГЕ 4.6 плана 4); выполнен оператором — хеш: _(ожидается)_.
+
+### Перечитывание migr_plan.md
+
+- ✅ (2026-10-11)
+
+### Гейт 4→5
+
+- ✅ (все пункты зелёные; `TaskStage` основной задачи не изменён — 0 переходов)
