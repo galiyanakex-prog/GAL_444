@@ -10,6 +10,7 @@ import json
 import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
+from urllib.parse import urlparse
 
 import requests
 
@@ -22,6 +23,22 @@ PRICE_OUT_PER_M = 33.0         # ₽ / 1M исходящих
 REQUEST_TIMEOUT = 30
 # Паузы между повторами при HTTP 429.
 RETRY_DELAYS = [2, 4, 8]
+
+# Локальные клиенты (Ревизия 8) — только loopback: приватность и предсказуемость.
+LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1"}
+
+
+def ensure_loopback(base_url: str) -> str:
+    """Проверяет, что base_url указывает на loopback; иначе ValueError.
+
+    Локальные клиенты (LM Studio, Ollama) обязаны ходить только на localhost —
+    это гарантия, что приватный контур не утекает наружу (решение оператора).
+    """
+    host = urlparse(base_url).hostname
+    if host not in LOOPBACK_HOSTS:
+        raise ValueError(
+            f"Локальный клиент допускает только loopback-адрес, получено: {base_url!r}")
+    return base_url.rstrip("/")
 
 
 @dataclass
@@ -226,6 +243,145 @@ class RouterAIClient(LLMClient):
                 return LLMReply(content="", tool_calls=[fallback], raw=message)
             return LLMReply(content=content, raw=message)
         return LLMReply(content="")
+
+
+class OpenAICompatClient(LLMClient):
+    """Основной локальный клиент (решение №21): OpenAI-совместимый сервер.
+
+    LM Studio, llama.cpp server и любой будущий локальный сервер отдают
+    `POST {base}/v1/chat/completions`. Отличия от RouterAIClient: нет внешнего
+    хоста и нет Authorization; адрес обязан быть loopback.
+    """
+
+    def __init__(self, base_url: str, model: str, max_tokens: int = None,
+                 timeout: int = 180, params: dict = None):
+        self.base_url = ensure_loopback(base_url)
+        self.model = model
+        self.max_tokens = max_tokens
+        self.timeout = timeout
+        self.params = dict(params or {})
+
+    def _payload(self, messages, tools=None, **params):
+        data = {"model": self.model, "messages": messages}
+        if self.max_tokens is not None:
+            data["max_tokens"] = self.max_tokens
+        data.update(self.params)
+        data.update(params)
+        if tools:
+            data["tools"] = tools
+            data["tool_choice"] = "auto"
+        return data
+
+    def complete(self, messages, **params) -> str:
+        url = f"{self.base_url}/v1/chat/completions"
+        data = self._payload(messages, **params)
+        for attempt in range(len(RETRY_DELAYS) + 1):
+            try:
+                response = requests.post(url, json=data, timeout=self.timeout)
+                if response.status_code == 429:
+                    if attempt == len(RETRY_DELAYS):
+                        print("[LM Studio] Лимит запросов: все повторы исчерпаны.")
+                        return None
+                    time.sleep(RETRY_DELAYS[attempt])
+                    continue
+                response.raise_for_status()
+                result = response.json()
+                if "choices" not in result or not result["choices"]:
+                    return None
+                return result["choices"][0]["message"]["content"] or ""
+            except requests.exceptions.RequestException as error:
+                print(f"[LM Studio] Ошибка сети/HTTP: {error}")
+                return None
+            except (KeyError, IndexError, ValueError) as error:
+                print(f"[LM Studio] Неожиданный формат ответа: {error}")
+                return None
+        return None
+
+    def complete_with_tools(self, messages, tools=None, **params) -> LLMReply:
+        """Нативный tool-use с fallback на текстовый протокол (как у RouterAI)."""
+        if not tools:
+            return LLMReply(content=self.complete(messages, **params) or "")
+        url = f"{self.base_url}/v1/chat/completions"
+        data = self._payload(messages, tools=tools, **params)
+        for attempt in range(len(RETRY_DELAYS) + 1):
+            try:
+                response = requests.post(url, json=data, timeout=self.timeout)
+                if response.status_code == 429:
+                    if attempt == len(RETRY_DELAYS):
+                        return LLMReply(content="")
+                    time.sleep(RETRY_DELAYS[attempt])
+                    continue
+                response.raise_for_status()
+                message = response.json()["choices"][0]["message"]
+            except requests.exceptions.RequestException as error:
+                print(f"[LM Studio] Ошибка сети/HTTP: {error}")
+                return LLMReply(content="")
+            except (KeyError, IndexError, ValueError) as error:
+                print(f"[LM Studio] Неожиданный формат ответа: {error}")
+                return LLMReply(content="")
+            calls = parse_tool_calls(message)
+            if calls:
+                return LLMReply(content="", tool_calls=calls, raw=message)
+            content = (message.get("content") if isinstance(message, dict)
+                       else getattr(message, "content", "")) or ""
+            fallback = parse_fallback_tool_call(content)
+            if fallback is not None:
+                return LLMReply(content="", tool_calls=[fallback], raw=message)
+            return LLMReply(content=content, raw=message)
+        return LLMReply(content="")
+
+
+class OllamaClient(LLMClient):
+    """Альтернативный локальный клиент: Ollama `/api/chat` (не OpenAI-формат).
+
+    Нативного function-calling у эндпоинта не предполагаем — `complete_with_tools`
+    использует базовый fallback-протокол (`parse_fallback_tool_call`). Адрес —
+    только loopback.
+    """
+
+    def __init__(self, base_url: str, model: str, max_tokens: int = None,
+                 timeout: int = 180, params: dict = None, keep_alive: str = None):
+        self.base_url = ensure_loopback(base_url)
+        self.model = model
+        self.max_tokens = max_tokens
+        self.timeout = timeout
+        self.params = dict(params or {})
+        self.keep_alive = keep_alive
+
+    def _options(self, **params):
+        options = {}
+        if self.max_tokens is not None:
+            options["num_predict"] = self.max_tokens
+        for key in ("temperature", "top_p", "num_ctx"):
+            if key in self.params:
+                options[key] = self.params[key]
+        for key in ("temperature", "top_p", "num_ctx", "num_predict"):
+            if key in params:
+                options[key] = params[key]
+        return options
+
+    def complete(self, messages, **params) -> str:
+        url = f"{self.base_url}/api/chat"
+        data = {"model": self.model, "messages": messages, "stream": False,
+                "options": self._options(**params)}
+        if self.keep_alive is not None:
+            data["keep_alive"] = self.keep_alive
+        for attempt in range(2):
+            try:
+                response = requests.post(url, json=data, timeout=self.timeout)
+                response.raise_for_status()
+                result = response.json()
+                message = result.get("message") or {}
+                return message.get("content") or ""
+            except requests.exceptions.RequestException as error:
+                if attempt == 1:
+                    print(f"[Ollama] Ошибка сети/HTTP: {error}")
+                    return None
+                time.sleep(RETRY_DELAYS[attempt])
+            except (KeyError, ValueError) as error:
+                print(f"[Ollama] Неожиданный формат ответа: {error}")
+                return None
+        return None
 
 
 class MockClient(LLMClient):

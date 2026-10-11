@@ -63,6 +63,7 @@ from memory.base import MemoryContext
 from memory.manager import MemoryManager, default_layers
 from core.llm_client import (RouterAIClient, MockClient, MODEL_CONTEXT_LIMIT,
                              PRICE_IN_PER_M, PRICE_OUT_PER_M)
+from core.model_registry import ModelRegistry
 from core.prompt_builder import PromptBuilder, DELIVERABLE
 from core.agent import Agent, StubExecutor
 from core.state_machine import TaskStage, ALLOWED_TRANSITIONS
@@ -89,6 +90,8 @@ parser.add_argument("--deliver", type=str, default="profile,invariants,long_term
                     help="Набор слоёв для доставки в промт (через запятую).")
 parser.add_argument("--mock", action="store_true",
                     help="Режим MockClient: ответы от заглушки, ключ не нужен.")
+parser.add_argument("--model", type=str, default=None, metavar="ID",
+                    help="Модель/сервис для сессии из models.json (по умолчанию облако).")
 parser.add_argument("--fresh", action="store_true",
                     help="Не восстанавливать прошлое состояние (новая сессия).")
 parser.add_argument("--log", type=str, default="Den_log.md",
@@ -173,6 +176,8 @@ args = parser.parse_args()
 MEMORY_ROOT = args.memory_dir if args.memory_dir else os.path.join(BASE_DIR, "users")
 LOG_FILE = os.path.join(BASE_DIR, args.log) if not os.path.isabs(args.log) else args.log
 TOKEN_LOG = os.path.join(BASE_DIR, args.token_log) if not os.path.isabs(args.token_log) else args.token_log
+# Реестр моделей (Ревизия 8): секретов не содержит, лежит рядом с кодом.
+MODELS_PATH = os.path.join(BASE_DIR, "models.json")
 
 # 4. Роль агента ---------------------------------------------------------------
 SYSTEM_PROMPT = (
@@ -224,7 +229,8 @@ def append_token_log(exchange, prompt_tokens, cost_rubles):
 
 # 8. Композиция объектов (DI) ---------------------------------------------------
 def build_agent(user_id=None, mock=False, mcp_enabled=False, scheduler_enabled=False,
-                scheduler_interval=60.0, rag_enabled=False, rag_config=None):
+                scheduler_interval=60.0, rag_enabled=False, rag_config=None,
+                model_id=None):
     """Собирает Store + профиль-репозиторий + слои + LLM-клиент в Agent.
 
     MCP-слой опционален (mcp_enabled=False по умолчанию — поведение = den_15):
@@ -232,6 +238,8 @@ def build_agent(user_id=None, mock=False, mcp_enabled=False, scheduler_enabled=F
     Планировщик (День 18, scheduler_enabled) — фоновый worker 24/7, независимый
     от LLM; по умолчанию не поднимается.
     RAG-слой (День 21, rag_enabled) — фасад RagService; по умолчанию выключен.
+    Модель (Ревизия 8, model_id) — выбор через ModelRegistry; без него поведение
+    прежних ревизий (облако / MockClient) не меняется.
     """
     store = Store(MEMORY_ROOT, log=log_line)
     repo = ProfileRepository(os.path.join(MEMORY_ROOT, "profiles.db"), log=log_line)
@@ -240,16 +248,29 @@ def build_agent(user_id=None, mock=False, mcp_enabled=False, scheduler_enabled=F
     memory = MemoryManager(default_layers(store, log=log_line), log=log_line)
     builder = PromptBuilder(SYSTEM_PROMPT)
 
+    # Реестр моделей (Ревизия 8): единая точка выбора клиента. Без model_id и без
+    # --mock поведение прежних ревизий сохраняется (облако / MockClient).
+    registry = ModelRegistry(MODELS_PATH, log=log_line)
+    if user_id:
+        registry.load_state(store.user_dir(user_id))
+    if model_id:
+        registry.use(model_id, user_dir=store.user_dir(user_id) if user_id else None)
+
     if mock or api_key is None or api_key == "test-key":
         client = MockClient(name="Mock")
         # В тестовом режиме план/шаги детерминированы (без сети): StubExecutor.
         executor = StubExecutor()
+        model_label = "mock/Mock"
     else:
-        client = RouterAIClient(api_key=api_key, max_tokens=args.max_tokens)
+        spec = registry.current()
+        client = registry.build(spec)
         executor = None  # Agent построит LLMExecutor по умолчанию
+        model_label = spec.display()
 
     agent = Agent(client, memory, builder, store, user_id=user_id,
                   default_task="Основная_задача", log=log_line, executor=executor)
+    agent.set_model(client, label=model_label)
+    agent.model_registry = registry
 
     # MCP-слой (День 16): только при явном включении; MCP off по умолчанию.
     if mcp_enabled:
@@ -1460,7 +1481,8 @@ def main():
     agent = build_agent(user_id=user_id, mock=args.mock, mcp_enabled=args.mcp,
                         scheduler_enabled=args.scheduler,
                         scheduler_interval=args.scheduler_interval,
-                        rag_enabled=args.rag, rag_config=rag_cfg)
+                        rag_enabled=args.rag, rag_config=rag_cfg,
+                        model_id=args.model)
 
     # Накопительный трекер токенов сессии (локальная оценка).
     exchange_tracker = {"n": 0, "tokens": 0, "cost": 0.0}

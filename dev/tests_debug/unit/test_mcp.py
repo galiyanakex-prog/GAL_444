@@ -418,18 +418,24 @@ def test_mcp_off_by_default(tmp_path):
 # --- 11. Конфиг --------------------------------------------------------------------------------
 
 def test_load_servers_config_fallbacks(tmp_path):
-    defaults = list(DEFAULT_SERVERS)
-    assert load_servers_config(None) == defaults
-    assert load_servers_config(str(tmp_path / "nope.json")) == defaults
+    # Берём актуальные DEFAULT_SERVERS/load_servers_config из модуля, а не из
+    # from-import-ссылок, захваченных на сборке: test_d1_probe делает
+    # importlib.reload(integrations.mcp.config), что пересоздаёт класс
+    # MCPServerConfig. Иначе сравнение dataclass'ов разных «поколений» reload'а
+    # даёт NotImplemented → падение только в полном прогоне (зависит от порядка).
+    import integrations.mcp.config as cfg
+    defaults = list(cfg.DEFAULT_SERVERS)
+    assert cfg.load_servers_config(None) == defaults
+    assert cfg.load_servers_config(str(tmp_path / "nope.json")) == defaults
     broken = tmp_path / "broken.json"
     broken.write_text("{не json", encoding="utf-8")
-    assert load_servers_config(str(broken)) == defaults
+    assert cfg.load_servers_config(str(broken)) == defaults
     no_key = tmp_path / "no_key.json"
     no_key.write_text(json.dumps({"other": []}), encoding="utf-8")
-    assert load_servers_config(str(no_key)) == defaults
+    assert cfg.load_servers_config(str(no_key)) == defaults
     empty = tmp_path / "empty.json"
     empty.write_text(json.dumps({"servers": []}), encoding="utf-8")
-    assert load_servers_config(str(empty)) == defaults
+    assert cfg.load_servers_config(str(empty)) == defaults
 
 
 def test_load_servers_config_valid_ignores_unknown(tmp_path):

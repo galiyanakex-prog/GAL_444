@@ -1,154 +1,184 @@
-# migr_plan_1.md — Этап 1. Ollama + embedding-модель: проверка (О1)
+# migr_plan_1.md — Этап 1. Локальные сервисы: LM Studio + боевая модель (О1)
 
-> Рабочий план **одного этапа** на основе `dev/migr_plan.md` (Ревизия 7, §4 «Этап 1»).
+> Рабочий план **одного этапа** на основе `dev/migr_plan.md` (**Ревизия 8, v1.1**, §4 «Этап 1»).
 > Контур: **О (оснащение)**. Метка цели: **О1**. Зависимости: **этап 0** (закрыт).
 > Порядок выполнения: **пошагово с оператором** — агент даёт команду, оператор
 > подтверждает, агент выполняет и фиксирует вывод.
-> **Коммиты — только за оператором** (текст предложен в ШАГЕ 1.5).
+> **Коммиты — только за оператором** (текст предложен в ШАГЕ 1.7).
 
 ## Цель этапа
 
-**Подтвердить**, что локальный сервис эмбеддингов (поднят в Ревизии 6) доступен и
-воспроизводим: бинарь `ollama`, прослушивание **только** `127.0.0.1:11434`, модель
-`bge-m3` (dim 1024), справка `ND/models/bge-m3_params.md`. **Новой установки нет** —
-этап проверочный; при необходимости запуск/`pull` выполняет **оператор**.
+Подтвердить, что **боевая локальная чат-модель** доступна по HTTP и CLI и отвечает.
+Закрывает **часть 1** `Задание.txt`: «модель запускается локально», «к ней можно
+обратиться через CLI или HTTP API», «минимум 3 запроса разной сложности».
 
-## Предусловия (проверено 2026-10-05)
+**Боевая модель (решение №20):** `Qwen2.5-Coder-3B-Instruct-Distill-Qwen3-Coder-Next-abliterated-GGUF`, файл
+`~/.lmstudio/models/mradermacher/Qwen2.5-Coder-3B-Instruct-Distill-Qwen3-Coder-Next-abliterated-GGUF/Qwen2.5-Coder-3B-Instruct-Distill-Qwen3-Coder-Next-abliterated.Q6_K.gguf`.
+**Скачивать ничего не нужно** — модель уже на диске (2,5 ГБ, единственный тег).
 
-- `systemctl is-active ollama` → **active**; `is-enabled` → disabled (поднимается
-  вручную/через `Restart`, автозапуск при загрузке — отдельное решение оператора).
-- `ss -ltnp | grep 11434` → слушает **127.0.0.1:11434** (не `0.0.0.0`).
-- `curl http://127.0.0.1:11434/api/version` → `{"version":"0.35.1"}`.
-- `ollama list` → `bge-m3:latest` (1.2 ГБ).
-- `ND/models/bge-m3_params.md` — создан в Ревизии 6.
-- `.env.example` — содержит `OLLAMA_EMBED_URL`, `OLLAMA_EMBED_MODEL`.
-- `rag/config.json → embedding` = `{provider: "ollama", model: "bge-m3", dim: 1024,
-  url: "http://127.0.0.1:11434"}`.
+## Предусловия (проверено 2026-10-11)
+
+- Боевой GGUF на диске (2,5 ГБ); других тегов у Qwen2.5-Coder-3B-Instruct-Distill-Qwen3-Coder-Next-abliterated нет.
+- LM Studio CLI: `/home/u/.lmstudio/bin/lms`; HTTP-сервер `127.0.0.1:1234` **не отвечал**.
+- Ollama `127.0.0.1:11434` **не отвечала** (эмбеддинг-сервис RAG, `bge-m3`).
+- Железо: RAM 15 ГБ, **дискретного GPU нет** → CPU-inference.
 
 ## Границы этапа
 
-- **Не** пишем код RAG (этапы 3–6 — проверка, 7–12 — работа).
-- **Не** трогаем `Kod.py`, `core/`, `storage/`, `memory/`, `integrations/`.
-- **Не** добавляем pip-зависимостей (Ollama — внешний сервис, не библиотека Python).
-- **Не** открываем порт наружу: `OLLAMA_HOST` = `127.0.0.1:11434` (решение №5).
+- **Не** пишем код агента (это этапы 2–4); этап — **проверочный**.
+- **Не** трогаем `Kod.py`, `core/`, `storage/`, `memory/`, `integrations/`, `rag/`.
+- **Не** добавляем pip-зависимостей (LM Studio/Ollama — внешние сервисы).
+- **`ollama pull` не выполняем** — можно вытеснить `bge-m3` и сломать RAG-индекс.
+- **Установка/запуск сервисов — за оператором** (мы вне песочницы).
 
 ---
 
 ## Шаги
 
-### ШАГ 1.1 — Проверка сервиса (агент)
+### ШАГ 1.1 — Подъём LM Studio (выполняет ОПЕРАТОР)
+
+Агент объясняет цель и последствия; команды запускает оператор:
 
 ```bash
-systemctl is-active ollama          # ожидаем: active
-systemctl is-enabled ollama         # ожидаем: disabled (или enabled — не критично)
-ss -ltnp 2>/dev/null | grep 11434   # ожидаем: LISTEN ... 127.0.0.1:11434
+~/.lmstudio/bin/lms status          # убедиться, что сервер не поднят (иначе: lms server stop)
+~/.lmstudio/bin/lms server start    # поднять HTTP-сервер на 127.0.0.1:1234
+~/.lmstudio/bin/lms ls              # убедиться, что боевая модель видна
+~/.lmstudio/bin/lms load mradermacher/Qwen2.5-Coder-3B-Instruct-Distill-Qwen3-Coder-Next-abliterated-GGUF:Qwen2.5-Coder-3B-Instruct-Distill-Qwen3-Coder-Next-abliterated.Q6_K.gguf --gpu 0 --context-length 8192
+~/.lmstudio/bin/lms ps              # подтвердить загрузку и фактическое потребление RAM
 ```
 
-**Если inactive** — команды выполняет **оператор** (мы вне песочницы):
+> `--gpu 0` — потому что дискретного GPU нет (см. §0.4); `--context-length 8192` —
+> стартовое окно, уточняется на этапе 7. **Без отвечающего сервера и загруженной модели
+> гейт 1 не закрывается** (решение №21).
+
+### ШАГ 1.2 — Живая проверка HTTP (агент)
 
 ```bash
-sudo systemctl enable --now ollama  # цель: поднять локальный сервис эмбеддингов
+curl -s --max-time 5 http://127.0.0.1:1234/v1/models | head -c 400
 ```
 
-Убедиться, что `OLLAMA_HOST` = `127.0.0.1:11434` (не `0.0.0.0`).
+Ожидаемо: в списке есть `Qwen2.5-Coder-3B-Instruct-Distill-Qwen3-Coder-Next-abliterated`. Затем — **3 запроса разной сложности**
+через `POST /v1/chat/completions`:
 
-### ШАГ 1.2 — Проверка модели (агент)
-
-```bash
-ollama list | grep -E "bge-m3|nomic-embed-text"
-```
-
-**Если модели нет** — команда оператора:
+- **Л1** «Скажи: ок» (smoke);
+- **Л2** «Перечисли 3 модуля проекта по списку файлов» (следование инструкции);
+- **Л3** «По этому фрагменту кода объясни, что делает функция, и назови риск» (рассуждение).
 
 ```bash
-ollama pull bge-m3                  # ~1.2 ГБ, dim 1024, RU+EN
-```
-
-Фолбэк для слабого железа: `ollama pull nomic-embed-text` (274 МБ, dim 768). При выборе
-фолбэка правятся **только** `rag/config.json → embedding.{model,dim}`; код не трогается.
-
-### ШАГ 1.3 — Живой probe `/api/embed` (агент)
-
-```bash
-curl -s --max-time 5 http://127.0.0.1:11434/api/version
 .venv/bin/python - <<'EOF'
-import json, urllib.request
-req = urllib.request.Request(
-    "http://127.0.0.1:11434/api/embed",
-    data=json.dumps({"model": "bge-m3", "input": ["тест", "второй текст"]}).encode(),
-    headers={"Content-Type": "application/json"})
-with urllib.request.urlopen(req, timeout=60) as resp:
-    data = json.load(resp)
-vecs = data["embeddings"]
-print("векторов:", len(vecs), "| dim =", len(vecs[0]),
-      "| первые 3:", [round(x, 4) for x in vecs[0][:3]])
-assert len(vecs) == 2 and len(vecs[0]) == 1024, f"ожидали 2×1024, получили {len(vecs)}×{len(vecs[0])}"
-print("OK: /api/embed вернул 2 вектора длиной 1024")
+import json, time, urllib.request
+URL = "http://127.0.0.1:1234/v1/chat/completions"
+MODEL = "mradermacher/Qwen2.5-Coder-3B-Instruct-Distill-Qwen3-Coder-Next-abliterated-GGUF:Qwen2.5-Coder-3B-Instruct-Distill-Qwen3-Coder-Next-abliterated.Q6_K.gguf"
+prompts = [
+    ("Л1", "Скажи: ок"),
+    ("Л2", "Перечисли 3 модуля проекта по списку файлов: core/agent.py, rag/service.py, memory/manager.py"),
+    ("Л3", "Объясни, что делает функция, и назови риск: def f(xs): return sum(xs)/len(xs)"),
+]
+for tag, text in prompts:
+    body = json.dumps({"model": MODEL, "messages": [{"role": "user", "content": text}],
+                       "temperature": 0.2, "max_tokens": 256}).encode()
+    req = urllib.request.Request(URL, data=body, headers={"Content-Type": "application/json"})
+    t0 = time.time()
+    with urllib.request.urlopen(req, timeout=180) as r:
+        data = json.load(r)
+    dt = time.time() - t0
+    ans = data["choices"][0]["message"]["content"]
+    print(f"[{tag}] {dt:.1f}s | {len(ans)} симв. | {ans[:120]!r}")
+    assert ans.strip(), f"{tag}: пустой ответ"
+print("OK: 3 запроса разной сложности отвечены")
 EOF
 ```
 
-Транскрипт сохранить в `dev/logs_reports/stages/rag_ollama_probe.txt` (перезапись
-версии Ревизии 6 допустима — фиксируем текущее состояние).
-
-### ШАГ 1.4 — Справка и `.env.example` (проверка наличия)
+### ШАГ 1.3 — CLI-проверка LM Studio (агент)
 
 ```bash
-grep -c "Эндпоинты API\|Параметры\|Отличия от чат-моделей" ND/models/bge-m3_params.md
-grep -E "OLLAMA_EMBED_URL|OLLAMA_EMBED_MODEL" .env.example
+~/.lmstudio/bin/lms --help | head -30
+# 1 запрос через CLI (точная подкоманда — по факту вывода --help, напр. lms run)
 ```
 
-Ожидаемо: справка содержит все три раздела; `.env.example` — обе переменные.
-При отсутствии — создать (образец — в `dev/old_vers/7/` и §4 мастер-плана).
+### ШАГ 1.4 — Ollama как альтернативный провайдер (не обязателен)
 
-### ШАГ 1.5 — Запись в журнал + перечитывание плана
+```bash
+curl -s --max-time 3 http://127.0.0.1:11434/api/version || echo "Ollama-чат: НЕДОСТУПЕН"
+```
+
+- Если Ollama отвечает и на ней есть **чат-модель** — те же 3 запроса через `POST /api/chat`
+  и 1 через `ollama run`; она регистрируется в `models.json` (этап 2) как второй локальный путь.
+- Если Ollama занята эмбеддингом или недоступна — **явная строка «Ollama-чат недоступен»**
+  в транскрипте. **Часть 1 от этого не страдает** (боевой путь — LM Studio).
+- **`ollama pull` не выполняем.**
+
+### ШАГ 1.5 — Транскрипт живого прогона
+
+Сохранить в `dev/logs_reports/stages/local_llm_probe.md`: запрос, ответ, латентность,
+число токенов, версия сервиса, тег/квант модели.
+
+### ШАГ 1.6 — Справка о модели + `.env.example`
+
+- `ND/models/Qwen2.5-Coder-3B-Instruct-Distill-Qwen3-Coder-Next-abliterated_params.md` — окно контекста, параметры, доступные
+  теги квантования (из каталога `~/.lmstudio/models`), требования по RAM; отдельно —
+  фактическое потребление по `lms ps`. Если Ollama-чат использовалась — вторая справка.
+- `.env.example` (без секретов):
+  ```
+  LMSTUDIO_URL=http://127.0.0.1:1234
+  LMSTUDIO_MODEL=mradermacher/Qwen2.5-Coder-3B-Instruct-Distill-Qwen3-Coder-Next-abliterated-GGUF:Qwen2.5-Coder-3B-Instruct-Distill-Qwen3-Coder-Next-abliterated.Q6_K.gguf
+  OLLAMA_CHAT_URL=http://127.0.0.1:11434
+  AI9_MODEL=cloud
+  ```
+
+### ШАГ 1.7 — Запись в журнал + перечитывание плана
 
 Внести запись «Этап 1» в `dev/migr_log.md` по шаблону §7.3.
 
 **Предлагаемый текст коммита** (выполняет **только** оператор):
 
 ```
-chore(rag): проверка локального сервиса эмбеддингов Ollama (этап 1, Ревизия 7)
+feat(local-llm): LM Studio + боевая Qwen2.5-Coder-3B-Instruct-Distill-Qwen3-Coder-Next-abliterated-Q6_K (этап 1, Ревизия 8)
 
-Причина: этап 4 (OllamaEmbedder) требует живого эндпоинта 127.0.0.1:11434 с моделью
-dim 1024. Сервис поднят в Ревизии 6 — Ревизия 7 подтверждает доступность и фиксирует
-транскрипт probe; новых установок и pip-зависимостей нет.
+Причина: часть 1 Задание.txt требует запущенной локальной LLM, доступной по CLI/HTTP,
+с ≥ 3 запросами разной сложности. Боевая модель уже на диске; этап поднимает сервер
+LM Studio, фиксирует живые ответы и справку о модели. Ollama остаётся эмбеддинг-сервисом
+RAG (pull не выполняется).
 ```
 
 ---
 
 ## Выход этапа
 
-- подтверждено: сервис active, слушает `127.0.0.1:11434`, модель `bge-m3` (dim 1024);
-- `dev/logs_reports/stages/rag_ollama_probe.txt` — транскрипт probe;
-- `ND/models/bge-m3_params.md`, `.env.example` — проверены;
+- подтверждено: LM Studio `127.0.0.1:1234` отвечает, боевая модель в `/v1/models`;
+- 3 запроса разной сложности через HTTP + 1 через CLI — с латентностями;
+- `dev/logs_reports/stages/local_llm_probe.md` — транскрипт;
+- `ND/models/Qwen2.5-Coder-3B-Instruct-Distill-Qwen3-Coder-Next-abliterated_params.md` — справка;
+- `.env.example` — переменные LM Studio/Ollama (без секретов);
+- статус Ollama-чата зафиксирован (живой путь или явное «недоступно»);
 - запись «Этап 1» в `dev/migr_log.md`;
 - `requirements.txt`, `Kod.py`, `core/`, `storage/` — **не изменены**.
 
-## Гейт 1→2 (все пункты зелёные)
+## Гейт 1→2 (живой, все пункты зелёные)
 
 | № | Проверка | Ожидаемо |
 |---|---|---|
-| 1 | `curl -s http://127.0.0.1:11434/api/version` | JSON с `version` |
-| 2 | `ss -ltnp \| grep 11434` | слушает **127.0.0.1**, не `0.0.0.0` |
-| 3 | `systemctl is-active ollama` | `active` |
-| 4 | `ollama list \| grep bge-m3` | модель присутствует |
-| 5 | probe `/api/embed` (heredoc) | 2 вектора длиной **1024** |
-| 6 | `ND/models/bge-m3_params.md` | разделы «Эндпоинты API», «Параметры», «Отличия от чат-моделей» |
-| 7 | `.env.example` | содержит `OLLAMA_EMBED_URL`, `OLLAMA_EMBED_MODEL` |
-| 8 | `unit_runner.py` / `smoke.py` / `scenario.py` / `check_acceptance.sh` | без регрессии (244 OK / SMOKE OK / SCENARIO OK / 33 из 33) |
-| 9 | `git diff --stat requirements.txt` | пусто |
-| 10 | запись «Этап 1» + перечитывание `migr_plan.md` | ✅ |
+| 1 | `GET /v1/models` | содержит `Qwen2.5-Coder-3B-Instruct-Distill-Qwen3-Coder-Next-abliterated` |
+| 2 | `POST /v1/chat/completions` × 3 | непустой ответ на все 3 запроса разной сложности |
+| 3 | CLI-запрос через `lms` | выполнен |
+| 4 | транскрипт с латентностями | `stages/local_llm_probe.md` |
+| 5 | справка `ND/models/Qwen2.5-Coder-3B-Instruct-Distill-Qwen3-Coder-Next-abliterated_params.md` | создана |
+| 6 | статус Ollama-чата | живой путь **или** явное «недоступно» |
+| 7 | `unit_runner.py` / `smoke.py` / `scenario.py` / `check_acceptance.sh` | без регрессии (290 OK / SMOKE OK / SCENARIO OK / 39 из 43) |
+| 8 | `git diff --stat requirements.txt` | пусто |
+| 9 | запись «Этап 1» + перечитывание `migr_plan.md` | ✅ |
 
-Красный хотя бы один из 1–9 → карточка в `dev/logs_reports/errors/error_<ts>.md`,
-этап 1 остаётся открытым.
+Красный хотя бы один из 1–3 → карточка в `dev/logs_reports/errors/error_<ts>.md`,
+этап 1 остаётся открытым (**блокер**: без LM Studio живые этапы не начинаются).
 
 ## Откат
 
-Правок кода нет; откат = вернуть `dev/logs_reports/stages/rag_ollama_probe.txt` из
-бэкапа при необходимости. Запись в журнале помечается ❌ с причиной.
+Правок кода нет; откат = остановить сервер (`lms server stop`) и вернуть транскрипт/справку
+из бэкапа при необходимости. Запись в журнале помечается ❌ с причиной.
 
 ## Что передаём дальше
 
-- **Этапу 4 (R2):** живой эндпоинт `127.0.0.1:11434/api/embed`, модель `bge-m3`
-  dim 1024 — `OllamaEmbedder` ходит именно сюда; фолбэк `HashingEmbedder` (dim 256).
-- **Этапу 2 (О2):** сервис для сборки корпуса не нужен, но порядок 1→2→3→4 сохраняется.
+- **Этапу 2 (L1):** живой эндпоинт `127.0.0.1:1234/v1/chat/completions` и полный id модели —
+  `OpenAICompatClient` ходит именно сюда; `models.json` получает боевой id.
+- **Этапу 5 (G1):** Ollama `bge-m3` (эмбеддинги) — retrieval локального RAG.
+- **Этапу 7 (P1):** `--context-length 8192` — стартовое окно для профилей параметров.

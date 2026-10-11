@@ -264,6 +264,27 @@ class Agent:
         # Пользователь уже инициализирован (профиль создан)?
         self.initialized = False
 
+        # Модель/сервис (Ревизия 8, этап 2): единая подпись для CLI/лога/HTTP.
+        # None → подпись не задана (поведение прежних ревизий не меняется).
+        self._model_label = None
+
+    # --- Модель/сервис (Ревизия 8) ----------------------------------------------
+    def set_model(self, client: LLMClient, label: str = None) -> None:
+        """Заменяет LLM-клиент в одном месте: и `self.llm`, и `self.executor.llm`.
+
+        Единая точка переключения модели (команда `/model use`). Не трогает
+        TaskStage, память и набор `deliver` — «инструмент ≠ переход».
+        """
+        self.llm = client
+        if getattr(self, "executor", None) is not None:
+            self.executor.llm = client
+        if label is not None:
+            self._model_label = label
+
+    def model_label(self) -> str:
+        """Единый источник подписи модели для CLI/лога/HTTP."""
+        return self._model_label or "cloud/stepfun/step-3.5-flash"
+
     # --- Идентификация и интервью-инициализация ----------------------------------
     def interview_questions(self) -> list:
         """Три вопроса персонализации (стиль / констрейнты / контекст)."""

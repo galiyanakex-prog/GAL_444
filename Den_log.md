@@ -353,3 +353,11 @@
 [16:26:33] [Агент] Пользователь demo16 инициализирован (интервью пройдено)
 [16:26:33] [Память] working ← ['lifecycle_summary'] → dev/tests_debug/.tmp/manual_check/demo16/tasks/Основная_задача/working_memory.json
 [16:26:33] [Память] remember(working) → working_memory.json ['lifecycle_summary']
+[06:46:50] [RAG] Ollama недоступен (OllamaEmbedder: не удалось получить эмбеддинги: <urlopen error [Errno 111] Connection refused>) — деградация на HashingEmbedder
+[06:46:57] [RAG] Ollama недоступен (OllamaEmbedder: не удалось получить эмбеддинги: <urlopen error [Errno 111] Connection refused>) — деградация на HashingEmbedder
+[06:47:04] [RAG] Ollama недоступен (OllamaEmbedder: не удалось получить эмбеддинги: <urlopen error [Errno 111] Connection refused>) — деградация на HashingEmbedder
+[08:33:39] [RAG] Ollama недоступен (OllamaEmbedder: не удалось получить эмбеддинги: <urlopen error [Errno 111] Connection refused>) — деградация на HashingEmbedder
+[08:33:46] [RAG] Ollama недоступен (OllamaEmbedder: не удалось получить эмбеддинги: <urlopen error [Errno 111] Connection refused>) — деградация на HashingEmbedder
+[08:33:53] [RAG] Ollama недоступен (OllamaEmbedder: не удалось получить эмбеддинги: <urlopen error [Errno 111] Connection refused>) — деградация на HashingEmbedder
+[15:06:49] [RAG] grounding: verdict=partial coverage=0.25 ссылок=0 чисел вне=0
+[15:41:16] [RAG] grounding: verdict=partial coverage=0.25 ссылок=0 чисел вне=0
