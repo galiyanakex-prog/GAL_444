@@ -361,3 +361,4 @@
 [08:33:53] [RAG] Ollama недоступен (OllamaEmbedder: не удалось получить эмбеддинги: <urlopen error [Errno 111] Connection refused>) — деградация на HashingEmbedder
 [15:06:49] [RAG] grounding: verdict=partial coverage=0.25 ссылок=0 чисел вне=0
 [15:41:16] [RAG] grounding: verdict=partial coverage=0.25 ссылок=0 чисел вне=0
+[19:13:47] [RAG] grounding: verdict=partial coverage=0.25 ссылок=0 чисел вне=0

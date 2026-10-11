@@ -74,9 +74,12 @@ load_dotenv()
 api_key = os.getenv("API_KEY")
 
 # Кодировки stdin/stdout: errors="replace" — битые байты заменяются заглушкой,
-# а не роняют программу (урок дня 10).
-sys.stdin.reconfigure(encoding="utf-8", errors="replace")
-sys.stdout.reconfigure(errors="replace")
+# а не роняют программу (урок дня 10). Под pytest stdin/stdout подменяются
+# объектами без reconfigure — проверяем наличие метода.
+if hasattr(sys.stdin, "reconfigure"):
+    sys.stdin.reconfigure(encoding="utf-8", errors="replace")
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(errors="replace")
 
 # 3. Флаги --------------------------------------------------------------------
 parser = argparse.ArgumentParser(
@@ -92,6 +95,10 @@ parser.add_argument("--mock", action="store_true",
                     help="Режим MockClient: ответы от заглушки, ключ не нужен.")
 parser.add_argument("--model", type=str, default=None, metavar="ID",
                     help="Модель/сервис для сессии из models.json (по умолчанию облако).")
+parser.add_argument("--model-list", action="store_true",
+                    help="One-shot: напечатать реестр моделей и выйти.")
+parser.add_argument("--model-profile", type=str, default=None, metavar="NAME",
+                    help="Профиль параметров модели (default / rag-strict / fast).")
 parser.add_argument("--fresh", action="store_true",
                     help="Не восстанавливать прошлое состояние (новая сессия).")
 parser.add_argument("--log", type=str, default="Den_log.md",
@@ -211,18 +218,25 @@ def log_line(line: str):
 
 
 # 7. CSV-журнал токенов (п.16) ---------------------------------------------------
-def append_token_log(exchange, prompt_tokens, cost_rubles):
-    """Дозаписывает строку обмена в CSV. Ошибка записи не роняет чат."""
+def append_token_log(exchange, prompt_tokens, cost_rubles, model=None):
+    """Дозаписывает строку обмена в CSV. Ошибка записи не роняет чат.
+
+    Колонка `model` (Ревизия 8, этап 3) — видимость модели в журнале. Старые
+    строки не переписываем: если файл уже существует без колонки, дописываем
+    строку с прежним набором полей (совместимость).
+    """
     try:
         is_new = not os.path.exists(TOKEN_LOG)
         with open(TOKEN_LOG, "a", newline="", encoding="utf-8") as f:
             writer = csv.writer(f)
             if is_new:
                 writer.writerow(["exchange", "timestamp", "prompt_tokens",
-                                 "cost_rubles", "cost_total_rubles"])
-            writer.writerow([exchange, datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                             prompt_tokens, f"{cost_rubles:.6f}",
-                             f"{cost_rubles * exchange:.6f}"])
+                                 "cost_rubles", "cost_total_rubles", "model"])
+            row = [exchange, datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                   prompt_tokens, f"{cost_rubles:.6f}", f"{cost_rubles * exchange:.6f}"]
+            if model is not None:
+                row.append(model)
+            writer.writerow(row)
     except OSError:
         pass
 
@@ -1102,6 +1116,113 @@ def run_interview(agent: Agent, user_id: str):
     print(f"[Инициализация] Профиль и дерево users/{user_id}/ созданы.\n")
 
 
+# 9.1 Модель/сервис (Ревизия 8, этап 3): отображение и команда /model ------------
+def model_banner(agent: Agent) -> str:
+    """Баннер сессии: единая подпись модели (сервис/модель, локальность, квант)."""
+    registry = getattr(agent, "model_registry", None)
+    if registry is None:
+        return f"[Сессия] модель: {agent.model_label()}"
+    spec = registry.current()
+    where = "локально" if spec.local else "облако"
+    quant = f", {spec.quant}" if spec.quant else ""
+    return (f"[Сессия] модель: {spec.display()} "
+            f"({where}{quant}, ctx {spec.context_window}, профиль {spec.profile})")
+
+
+def print_model_list(agent: Agent):
+    """Печать реестра моделей с отметкой текущей (токенов LLM не тратит)."""
+    registry = getattr(agent, "model_registry", None)
+    if registry is None:
+        print("[Модель] Реестр недоступен.\n")
+        return
+    current = registry.current_id
+    print(f"[Модели] Всего: {len(registry.list())}; текущая: {current}")
+    for spec in registry.list():
+        marker = "*" if spec.id == current else " "
+        where = "local" if spec.local else "cloud"
+        role = "" if spec.role == "chat" else f" [{spec.role}]"
+        print(f"  {marker} {spec.id}  ({where}{role})")
+    print()
+
+
+def handle_model_command(agent: Agent, user_input: str):
+    """Диспетчер /model: current | list | use <id> | status | profile <name>."""
+    registry = getattr(agent, "model_registry", None)
+    if registry is None:
+        print("[Модель] Реестр недоступен.\n")
+        return
+    parts = user_input.split()
+    sub = parts[1] if len(parts) > 1 else "current"
+
+    if sub in ("current", ""):
+        info = registry.describe(registry.current_id)
+        print(f"[Модель] {info['label']}")
+        print(f"  сервис: {info['service']} | {'локальная' if info['local'] else 'облачная'}"
+              f" | роль: {info['role']}")
+        if info["quant"]:
+            print(f"  квант: {info['quant']} | окно: {info['context_window']}")
+        print(f"  профиль: {info['profile']} | параметры: {info['params']}\n")
+        return
+
+    if sub == "list":
+        print_model_list(agent)
+        return
+
+    if sub == "use":
+        if len(parts) < 3:
+            print("[Модель] Укажите id: /model use <id> (см. /model list)\n")
+            return
+        model_id = parts[2]
+        try:
+            spec = registry.get(model_id)
+        except KeyError as error:
+            print(f"[Модель] ⚠ {error}\n")
+            return
+        # Проверка доступности сервиса (кроме mock/cloud) — не переключаемся вслепую.
+        if spec.service in ("lmstudio", "ollama"):
+            probe = registry.probe(model_id)
+            if not probe.get("ok"):
+                print(f"[Модель] ⚠ Сервис «{spec.service}» недоступен "
+                      f"({probe.get('error', 'нет ответа')}) — прежняя модель сохранена.\n")
+                return
+        client = registry.build(spec)
+        registry.use(model_id, user_dir=agent.store.user_dir(agent.user_id)
+                     if agent.user_id else None)
+        agent.set_model(client, label=spec.display())
+        print(f"[Модель] Переключено: {spec.display()}")
+        print(model_banner(agent) + "\n")
+        return
+
+    if sub == "status":
+        for spec in registry.list():
+            if spec.service in ("lmstudio", "ollama"):
+                probe = registry.probe(spec.id)
+                state = "доступна" if probe.get("ok") else "НЕдоступна"
+                print(f"  {spec.id}: {state} ({probe.get('latency_ms', '?')} мс, "
+                      f"{probe.get('version', '')})")
+        print()
+        return
+
+    if sub == "profile":
+        if len(parts) < 3:
+            print(f"[Модель] Профили: {', '.join(registry.profiles)}\n")
+            return
+        name = parts[2]
+        if name not in registry.profiles:
+            print(f"[Модель] ⚠ Профиль «{name}» не найден. "
+                  f"Доступны: {', '.join(registry.profiles)}\n")
+            return
+        spec = registry.current()
+        spec.profile = name
+        client = registry.build(spec)
+        agent.set_model(client, label=spec.display())
+        print(f"[Модель] Профиль «{name}» применён к {spec.display()}\n")
+        return
+
+    print(f"[Модель] Неизвестная подкоманда: {sub}. "
+          f"См. /model [current|list|use|status|profile]\n")
+
+
 # 10. Печать справки ---------------------------------------------------------------
 def print_help():
     print("[Справка] Доступные команды:")
@@ -1153,6 +1274,11 @@ def print_help():
     print("  /rag stats           — метрики индекса (чанки, документы, модель)")
     print("  /rag eval            — метрики retrieval на golden-датасете")
     print("  /rag check <ответ>   — проверка опоры ответа на последние источники")
+    print("  /model               — текущая модель/сервис (профиль, параметры, окно)")
+    print("  /model list          — все модели реестра + отметка текущей")
+    print("  /model use <id>      — переключить модель/сервис в сессии")
+    print("  /model status        — живой health-check сервисов (latency, версия)")
+    print("  /model profile <name> — применить профиль параметров (default/rag-strict/fast)")
     print("  /help                — эта справка")
     print("  /exit                — завершить и сохранить состояние")
     print()
@@ -1463,6 +1589,17 @@ def main():
     if args.mcp_probe:
         sys.exit(run_mcp_probe(args.mcp_probe_server))
 
+    # One-shot: печать реестра моделей и выход (токенов LLM не тратит).
+    if args.model_list:
+        registry = ModelRegistry(MODELS_PATH, log=log_line)
+        print(f"[Модели] Всего: {len(registry.list())}; текущая: {registry.current_id}")
+        for spec in registry.list():
+            marker = "*" if spec.id == registry.current_id else " "
+            where = "local" if spec.local else "cloud"
+            role = "" if spec.role == "chat" else f" [{spec.role}]"
+            print(f"  {marker} {spec.id}  ({where}{role})")
+        sys.exit(0)
+
     # One-shot прогоны RAG (День 21): индексация / поиск / метрики / сравнение.
     # REPL не запускается, LLM не тратится. Заданные прогоны идут по порядку
     # (индексация раньше метрик), код выхода — худший из кодов прогонов.
@@ -1514,6 +1651,17 @@ def main():
         else:
             print(f"[Профиль] ⚠ Профиль «{args.profile}» не найден — использую default.")
 
+    # Флаг --model-profile (Ревизия 8): профиль параметров модели на старте.
+    if args.model_profile:
+        registry = getattr(agent, "model_registry", None)
+        if registry is not None and args.model_profile in registry.profiles:
+            spec = registry.current()
+            spec.profile = args.model_profile
+            agent.set_model(registry.build(spec), label=spec.display())
+            print(f"[Модель] Профиль «{args.model_profile}» применён.")
+        else:
+            print(f"[Модель] ⚠ Профиль «{args.model_profile}» не найден — использую default.")
+
     # Применяем --deliver (набор слоёв по умолчанию).
     deliver = {part.strip() for part in args.deliver.split(",") if part.strip()}
     agent.deliver = deliver & set(DELIVERABLE)
@@ -1556,10 +1704,14 @@ def main():
     else:
         print("[Планировщик] Фон выключен (запустите с флагом --scheduler для 24/7).")
 
+    # Баннер модели (Ревизия 8, этап 3): во всех CLI-сессиях видно, что подключено.
+    print(model_banner(agent))
+
     print("Команды: /memory /profile [list|show|use|new|route|auto] /tasks /task [retry] "
           "/plan /approve /goto /transitions /step /run /pause /resume /deliver /compare "
           "/summary /state /tokens /cost /mcp summary|jobs|pipeline|route "
-          "/rag status|on|off|ingest|find|stats|eval|check /help /exit\n")
+          "/rag status|on|off|ingest|find|stats|eval|check /model [list|use|status|profile] "
+          "/help /exit\n")
 
     # Главный цикл.
     while True:
@@ -1696,6 +1848,9 @@ def main():
                 if command == "/rag":
                     handle_rag_command(agent, user_input)
                     continue
+                if command == "/model":
+                    handle_model_command(agent, user_input)
+                    continue
                 if command == "/exit":
                     stop_scheduler(agent)
                     agent.save_state()
@@ -1721,9 +1876,11 @@ def main():
             exchange_tracker["tokens"] += prompt_tokens
             exchange_cost = (prompt_tokens * args.price_in) / 1_000_000
             exchange_tracker["cost"] += exchange_cost
-            append_token_log(exchange_tracker["n"], prompt_tokens, exchange_cost)
+            append_token_log(exchange_tracker["n"], prompt_tokens, exchange_cost,
+                             model=agent.model_label())
 
-            print(f"Агент: {answer}\n")
+            # Префикс реплики (Ревизия 8, этап 3): видно, какая модель ответила.
+            print(f"[{agent.model_label()}] Агент: {answer}\n")
 
             # Источники/цитаты ответа (часть 3, этап 10): при активном RAG ответ
             # обязан нести источники (source + section/chunk_id) и цитаты.

@@ -904,7 +904,8 @@ class Agent:
 
         # 4. Сохранение ответа и обновление рабочей памяти (жизненный цикл).
         self.remember_message("assistant", answer, message_id + "a")
-        self.log(f"[Агент] {message_id}: ответ получен (доставка: {sorted(self.deliver)})")
+        self.log(f"[Агент] {message_id}: ответ получен (доставка: {sorted(self.deliver)}; "
+                 f"model={self.model_label()})")
         return answer
 
     # --- память задачи (часть 4 Задание.txt, этап 11) ---------------------------

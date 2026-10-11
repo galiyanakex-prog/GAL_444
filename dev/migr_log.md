@@ -274,3 +274,60 @@
 ### Гейт 2→3
 
 - ✅ (все пункты зелёные; `Agent` не импортирует провайдеров — только `LLMClient`)
+
+---
+
+## Этап 3 — `/model` + отображение модели во всех CLI-сессиях (цель: L2)
+
+- Статус: ✅ завершён (2026-10-11)
+- Было: модель выбиралась только флагом `--model`; в CLI не было видно, какая
+  модель/сервис подключены; `tokens.csv` и `Den_log.md` не несли модель.
+- Стало: команда `/model` (`current`/`list`/`use`/`status`/`profile`); флаги
+  `--model-list` (one-shot) и `--model-profile`; явное отображение модели —
+  баннер `[Сессия] модель: …`, префикс реплики `[service/model]`, `model=` в
+  `Den_log.md`, колонка `model` в `tokens.csv`.
+
+### Живой прогон
+
+- Одна сессия `cloud → lmstudio:…Q6_K → cloud` через `/model use` — 3 ответа,
+  у каждого своя подпись (транскрипт `stages/local_llm_switch.md`).
+- `/model list` — печатает все 4 спека реестра + отметку текущей.
+- `/model status` — живой health-check (LM Studio `ok`, latency ~2 мс).
+
+### Офлайн без сети
+
+- ✅ подтверждено: `/model use` для локального сервиса делает probe по loopback;
+  недоступный сервис → отказ с сохранением прежней модели.
+
+### Метрики
+
+- Локальный ответ боевой модели: короткий (~секунды, CPU).
+- `/model list`/`/model status` токенов LLM не тратят (только HTTP-probe).
+
+### Регрессия
+
+- `unit_runner.py` — **310 OK, 0 FAIL** (было 302; +8 новых `test_model_switch.py`);
+- `smoke.py` — SMOKE OK; `scenario.py` — SCENARIO OK;
+- `check_acceptance.sh` — **43 из 43**; `pytest -q` — **311 passed**;
+- `git diff --stat requirements.txt` — пусто (зависимостей не добавляли).
+
+### Артефакты
+
+- `Kod.py` — флаги `--model-list`/`--model-profile`, `handle_model_command`,
+  `model_banner`, `print_model_list`, префикс реплики, колонка `model` в CSV;
+- `core/agent.py` — `model=` в записи ответа `Den_log.md`;
+- `dev/tests_debug/unit/test_model_switch.py` — создан (9 тестов);
+- `dev/logs_reports/stages/local_llm_switch.md` — транскрипт живого прогона.
+
+### Коммит
+
+- Предложен оператору (текст — в ШАГЕ 3.6 плана 3); выполнен оператором — хеш: _(ожидается)_.
+
+### Перечитывание migr_plan.md
+
+- ✅ (2026-10-11)
+
+### Гейт 3→4
+
+- ✅ (все пункты зелёные; переключение не трогает `TaskStage`/память/`deliver`;
+  без `--model` промпт байт-в-байт прежний)
