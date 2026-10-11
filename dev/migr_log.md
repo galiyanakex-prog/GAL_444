@@ -389,3 +389,74 @@
 ### Гейт 4→5
 
 - ✅ (все пункты зелёные; `TaskStage` основной задачи не изменён — 0 переходов)
+
+---
+
+## Этап 5 — Локальная генерация в RAG (цель: G1)
+
+- Статус: ✅ завершён (2026-10-12)
+- Было: RAG-ответ генерировался облачной моделью (`RouterAIClient`); `RagService`
+  не имел явного инжекта генератора; секции `generation` в `rag/config.json` не было.
+- Стало: `RagService(cfg, llm=…)` принимает генератор (DI); `answer()` использует
+  переданный `llm`, иначе — инжектированный; секция `generation` в конфиге
+  (`provider`/`model`/`profile`); флаг `--local-gen` и команда `/gen local|cloud|status`;
+  полностью локальный контур `--rag --local-gen` (эмбеддинги Ollama + retrieval +
+  генерация локально).
+
+### Живой прогон
+
+- `--rag-ask "<вопрос>" --gen-provider lmstudio` на 3 вопросах по индексу Недели 5:
+  ответ + источники `[doc_id#chunk_id]` + цитаты; опора `partial`/`hallucination`/`ok`;
+  транскрипт `stages/rag_local_gen.md`.
+- `/gen status` → `/gen local` → `/gen status` → `/rag ask`: переключение генератора
+  RAG на lmstudio; одна точка — `agent.llm` и `rag_service.llm` совпадают;
+  транскрипт `stages/rag_gen_command.md`.
+- `--rag --local-gen`: баннер сессии несёт локальную модель, ответ с опорой `ok`;
+  транскрипт `stages/rag_local_gen_full.md`.
+
+### Офлайн без сети
+
+- ✅ подтверждено: прогон при заблокированном внешнем доступе
+  (`HTTP(S)_PROXY → 127.0.0.1:1`, loopback разрешён) — ответ получен локально,
+  `exit=0`; транскрипт `stages/rag_local_gen_offline.md`.
+- ✅ мониторинг соединений процесса (`ss -tnp`): внешних (не-loopback) соединений
+  за прогон — **0**.
+
+### Метрики
+
+- Латентность локальной генерации (CPU, 3B Q6_K, профиль rag-strict 700 токенов):
+  ~130–250 с на ответ; retrieval (bge-m3) — секунды.
+- Таймаут боевой модели поднят 180 → 600 с (генерация 700 токенов на CPU ~180 с
+  упиралась в прежний лимит).
+
+### Регрессия
+
+- `unit_runner.py` — **335 OK, 0 FAIL** (было 321; +14 новых `test_rag_local_gen.py`);
+- `smoke.py` — SMOKE OK; `scenario.py` — SCENARIO OK;
+- `check_acceptance.sh` — **43 из 43**; `pytest -q` — **336 passed**;
+- `git diff --stat requirements.txt` — пусто (зависимостей не добавляли).
+
+### Артефакты
+
+- `rag/service.py` — `__init__(cfg, log, llm, embedder)`, `answer` использует `self.llm`;
+- `rag/config.py` — `GenerationConfig` + секция в `RagConfig`, env `AI9_GEN_PROVIDER`/`AI9_GEN_MODEL`, валидация;
+- `rag/config.json` — секция `generation`;
+- `Kod.py` — `--local-gen`, `--gen-provider`, `--gen-model`, `_build_gen_client`,
+  `_build_gen_llm`, `handle_gen_command`, диспетчер `/gen`, строки справки;
+- `models.json` — таймаут боевой модели 600 с;
+- `dev/tests_debug/unit/test_rag_local_gen.py` — создан (14 тестов);
+- `dev/logs_reports/stages/rag_local_gen.md`, `rag_gen_command.md`,
+  `rag_local_gen_full.md`, `rag_local_gen_offline.md` — транскрипты живых прогонов.
+
+### Коммит
+
+- Предложен оператору (текст — в ШАГЕ 5.7 плана 5); выполнен оператором — хеш: _(ожидается)_.
+
+### Перечитывание migr_plan.md
+
+- ✅ (2026-10-12)
+
+### Гейт 5→6
+
+- ✅ (все пункты зелёные; внешних запросов нет; офлайн-прогон прошёл; индекс 117/9
+  совпадает с конфигом)

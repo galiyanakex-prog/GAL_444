@@ -23,11 +23,14 @@ from rag.types import IngestReport
 class RagService:
     """Фасад: ingest / search / context_block / stats / compare / evaluate / ground."""
 
-    def __init__(self, cfg: RagConfig = None, log=None):
+    def __init__(self, cfg: RagConfig = None, log=None, llm=None, embedder=None):
         self.cfg = (cfg or RagConfig.default()).validate()
         self.log = log or (lambda line: None)
+        # Явный инжект генератора (этап 5): callable(messages)->str. Смену модели
+        # внутри rag/ не делаем — клиент строит Kod.py через ModelRegistry (DI).
+        self.llm = llm
         self._index = None
-        self._embedder = None
+        self._embedder = embedder
         self._retriever = None
         self._loaded = False
         self._cache = SearchCache(self.cfg, log=self.log)
@@ -218,6 +221,8 @@ class RagService:
         from rag.sources import build_sources
         from rag.types import Answer
         started = time.time()
+        # Явный llm имеет приоритет; иначе — инжектированный в конструктор (этап 5).
+        llm = llm if llm is not None else self.llm
         hits = self.search(question, k=k, mode=mode, threshold=threshold) if use_rag else []
         if use_rag and not hits:
             # Часть 3: релевантность ниже порога → честное «не знаю», без LLM.

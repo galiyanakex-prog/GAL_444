@@ -75,6 +75,11 @@
     "enabled": false,
     "mode": "heuristic"
   },
+  "generation": {
+    "provider": "cloud",
+    "model": null,
+    "profile": null
+  },
   "budget": {
     "max_rag_tokens": 1400
   },

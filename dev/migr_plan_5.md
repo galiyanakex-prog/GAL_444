@@ -36,10 +36,13 @@
 ### ШАГ 5.2 — Секция `generation` в `rag/config.json`
 
 ```json
-"generation": {"provider": "cloud", "model": null, "profile": "default"}
+"generation": {"provider": "cloud", "model": null, "profile": null}
 ```
 
-Переопределение: `--gen-provider`, `--gen-model`, `AI9_GEN_PROVIDER`.
+Переопределение: `--gen-provider`, `--gen-model`, `AI9_GEN_PROVIDER`, `AI9_GEN_MODEL`.
+`profile: null` = «профиль самой модели из реестра» (напр. `rag-strict` у боевой 3B);
+иначе профиль перезаписывается и локальная модель генерирует без лимита токенов
+(упирается в таймаут).
 
 ### ШАГ 5.3 — Флаг `--local-gen` и REPL `/gen local`
 

@@ -141,6 +141,20 @@ class RewriteConfig:
 
 
 @dataclass(frozen=True)
+class GenerationConfig:
+    """Генератор ответа RAG (часть 3 Задание.txt, этап 5).
+
+    `provider` — `cloud` (RouterAI) | `lmstudio` | `ollama`; `model` — id из
+    `models.json` (None → первый chat-спек сервиса); `profile` — профиль параметров
+    (None → профиль самой модели из реестра, напр. `rag-strict`). Смену модели
+    внутри `rag/` НЕ делаем: клиент строит `Kod.py` через `ModelRegistry` (DI).
+    """
+    provider: str = "cloud"
+    model: str = None
+    profile: str = None
+
+
+@dataclass(frozen=True)
 class RagConfig:
     corpus: CorpusConfig = field(default_factory=CorpusConfig)
     chunking: ChunkingConfig = field(default_factory=ChunkingConfig)
@@ -152,6 +166,7 @@ class RagConfig:
     budget: BudgetConfig = field(default_factory=BudgetConfig)
     unknown: UnknownConfig = field(default_factory=UnknownConfig)
     rewrite: RewriteConfig = field(default_factory=RewriteConfig)
+    generation: GenerationConfig = field(default_factory=GenerationConfig)
     index_dir: str = "rag/index"
     enabled: bool = False               # RAG выключен по умолчанию
 
@@ -198,6 +213,13 @@ class RagConfig:
         if os.getenv("AI9_RAG_REWRITE_MODE"):
             patch["rewrite"] = dataclasses.replace(
                 self.rewrite, mode=os.environ["AI9_RAG_REWRITE_MODE"].strip().lower())
+        if os.getenv("AI9_GEN_PROVIDER"):
+            patch["generation"] = dataclasses.replace(
+                self.generation, provider=os.environ["AI9_GEN_PROVIDER"].strip().lower())
+        if os.getenv("AI9_GEN_MODEL"):
+            patch["generation"] = dataclasses.replace(
+                patch.get("generation", self.generation),
+                model=os.environ["AI9_GEN_MODEL"].strip())
         if os.getenv("OLLAMA_EMBED_URL"):
             emb["url"] = os.environ["OLLAMA_EMBED_URL"]
         if os.getenv("OLLAMA_EMBED_MODEL"):
@@ -222,6 +244,9 @@ class RagConfig:
             raise RagConfigError(f"неизвестный режим grounding: {self.grounding.mode}")
         if self.rewrite.mode not in ("heuristic", "llm"):
             raise RagConfigError(f"неизвестный режим rewrite: {self.rewrite.mode}")
+        if self.generation.provider not in ("cloud", "lmstudio", "ollama"):
+            raise RagConfigError(
+                f"неизвестный генератор RAG: {self.generation.provider}")
         return self
 
     def to_dict(self) -> dict:
@@ -243,6 +268,7 @@ SECTION_CLASSES = {
     "budget": BudgetConfig,
     "unknown": UnknownConfig,
     "rewrite": RewriteConfig,
+    "generation": GenerationConfig,
     "bm25": Bm25Config,
 }
 

@@ -365,3 +365,89 @@
 [20:03:10] [Субагент] запущен id=Ответь_одним_словом_готово_1791738190 service=lmstudio model=lmstudio:Qwen2.5-Coder-3B-Instruct-Distill-Qwen3-Coder-Next-abliterated-Q6_K pid=136089
 [20:03:17] [Субагент] id=Ответь_одним_словом_готово_1791738190 статус=ok (7.28 с)
 [20:28:36] [RAG] grounding: verdict=partial coverage=0.25 ссылок=0 чисел вне=0
+[20:49:29] [RAG] grounding: verdict=partial coverage=0.25 ссылок=0 чисел вне=0
+[20:53:42] [RAG] grounding: verdict=partial coverage=0.0 ссылок=0 чисел вне=0
+[21:02:07] [RAG] grounding: verdict=hallucination coverage=0.559 ссылок=1 чисел вне=18
+[21:03:45] [RAG] grounding: verdict=hallucination coverage=0.596 ссылок=2 чисел вне=8
+[22:59:24] [RAG] grounding: verdict=partial coverage=0.585 ссылок=0 чисел вне=17
+[23:04:50] [RAG] grounding: verdict=hallucination coverage=0.557 ссылок=1 чисел вне=11
+[23:06:56] [RAG] grounding: verdict=hallucination coverage=0.523 ссылок=2 чисел вне=4
+[23:19:18] [RAG] grounding: verdict=partial coverage=0.0 ссылок=0 чисел вне=0
+[23:22:19] [RAG] grounding: verdict=partial coverage=0.0 ссылок=0 чисел вне=0
+[23:25:19] [RAG] grounding: verdict=partial coverage=0.0 ссылок=0 чисел вне=0
+[23:29:21] [RAG] grounding: verdict=partial coverage=0.431 ссылок=0 чисел вне=2
+[23:31:42] [RAG] grounding: verdict=hallucination coverage=0.752 ссылок=3 чисел вне=4
+[23:33:34] [RAG] grounding: verdict=hallucination coverage=0.69 ссылок=3 чисел вне=3
+[23:35:59] [RAG] grounding: verdict=ok coverage=0.576 ссылок=3 чисел вне=0
+[23:44:15] [RAG] grounding: verdict=hallucination coverage=0.781 ссылок=2 чисел вне=7
+[23:46:55] [RAG] grounding: verdict=ok coverage=0.802 ссылок=3 чисел вне=0
+[23:46:55] [RAG] grounding: verdict=partial coverage=0.442 ссылок=0 чисел вне=3
+[23:48:13] [RAG] grounding: verdict=ok coverage=0.863 ссылок=3 чисел вне=0
+[23:51:30] [RAG] grounding: verdict=ok coverage=0.569 ссылок=3 чисел вне=0
+[23:54:55] [Хранилище] profile «default» = JSON в SQLite (таблица profiles, user_id=gentest)
+[23:54:55] [Память] profile «default» ← ['id', 'name', 'style', 'constraints', 'context'] → /home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/users/gentest/profiles/default.json (JSON в SQLite)
+[23:54:55] [Память] remember(profile) → profile.json (['id', 'name', 'style', 'constraints', 'context'])
+[23:54:55] [Память] working ← ['description'] → /home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/users/gentest/tasks/Основная_задача/working_memory.json
+[23:54:55] [Память] remember(working) → working_memory.json ['description']
+[23:54:55] [Память] long_term ← ['tasks'] → /home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/users/gentest/long_term_memory.json
+[23:54:55] [Память] remember(long_term) → long_term_memory.json ['tasks']
+[23:54:55] [Агент] Пользователь gentest инициализирован (интервью пройдено)
+[23:55:10] [RAG] grounding: verdict=partial coverage=0.558 ссылок=0 чисел вне=1
+[23:55:10] [Память] working ← ['lifecycle_summary'] → /home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/users/gentest/tasks/Основная_задача/working_memory.json
+[23:55:10] [Память] remember(working) → working_memory.json ['lifecycle_summary']
+[00:00:30] [Память] short_term ← M1 (parent=None) → /home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/users/gentest/tasks/Основная_задача/sessions/20261012_000029/session.json
+[00:00:30] [RAG] запрос «Тест» → 3 ист. (режим=hybrid, 162.2 мс):
+[00:00:30] [RAG]   1. b6216ef6a3dc333b6a59b9e2d22ee1c9b9434809#46  score=0.0164  [dense_rank=0, rrf=0.01639344262295082, sim=0.492, rerank=0, norm=0.492]  dev/Проверка.md
+[00:00:30] [RAG]   2. b6216ef6a3dc333b6a59b9e2d22ee1c9b9434809#37  score=0.0161  [dense_rank=1, rrf=0.016129032258064516, sim=0.4839, rerank=1, norm=0.4839]  dev/Проверка.md
+[00:00:30] [RAG]   3. db63ce0832be10d6e3ac0eb18696bc4f8a9198d7#1  score=0.0152  [dense_rank=5, rrf=0.015151515151515152, sim=0.4505, rerank=6, norm=0.4505]  ND/models/bge-m3_params.md
+[00:00:35] [RAG] grounding: verdict=partial coverage=0.0 ссылок=0 чисел вне=0
+[00:00:35] [RAG] grounding: verdict=partial coverage=0.0 ссылок=0 чисел вне=0
+[00:00:35] [Память] short_term ← M2 (parent=M1) → /home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/users/gentest/tasks/Основная_задача/sessions/20261012_000029/session.json
+[00:00:35] [Агент] M1: ответ получен (доставка: ['invariants', 'long_term', 'profile', 'rag', 'short_term', 'working']; model=cloud/stepfun/step-3.5-flash)
+[00:00:35] [Память] short_term ← M3 (parent=M2) → /home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/users/gentest/tasks/Основная_задача/sessions/20261012_000029/session.json
+[00:00:35] [RAG] запрос «краткий» → 5 ист. (режим=hybrid, 100.8 мс):
+[00:00:35] [RAG]   1. db63ce0832be10d6e3ac0eb18696bc4f8a9198d7#1  score=0.0164  [dense_rank=0, rrf=0.01639344262295082, sim=0.53, rerank=0, norm=0.53]  ND/models/bge-m3_params.md
+[00:00:35] [RAG]   2. b6216ef6a3dc333b6a59b9e2d22ee1c9b9434809#46  score=0.0161  [dense_rank=1, rrf=0.016129032258064516, sim=0.5025, rerank=1, norm=0.5025]  dev/Проверка.md
+[00:00:35] [RAG]   3. b6216ef6a3dc333b6a59b9e2d22ee1c9b9434809#5  score=0.0156  [dense_rank=3, rrf=0.015625, sim=0.4803, rerank=3, norm=0.4803]  dev/Проверка.md
+[00:00:35] [RAG]   4. db63ce0832be10d6e3ac0eb18696bc4f8a9198d7#7  score=0.0159  [dense_rank=2, rrf=0.015873015873015872, sim=0.4885, rerank=2, norm=0.4885]  ND/models/bge-m3_params.md
+[00:00:35] [RAG]   5. 2180fabb3ba04a0c91cb6d515453f1a0421de70b#17  score=0.0152  [dense_rank=5, rrf=0.015151515151515152, sim=0.464, rerank=5, norm=0.464]  core/prompt_builder.py
+[00:00:40] [RAG] grounding: verdict=partial coverage=0.35 ссылок=0 чисел вне=0
+[00:00:40] [RAG] grounding: verdict=partial coverage=0.35 ссылок=0 чисел вне=0
+[00:00:40] [Память] short_term ← M4 (parent=M3) → /home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/users/gentest/tasks/Основная_задача/sessions/20261012_000029/session.json
+[00:00:40] [Агент] M2: ответ получен (доставка: ['invariants', 'long_term', 'profile', 'rag', 'short_term', 'working']; model=cloud/stepfun/step-3.5-flash)
+[00:00:40] [Память] short_term ← M5 (parent=M4) → /home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/users/gentest/tasks/Основная_задача/sessions/20261012_000029/session.json
+[00:00:40] [RAG] запрос «нет» → 5 ист. (режим=hybrid, 94.9 мс):
+[00:00:40] [RAG]   1. 9eb3588a77dd9bfc303a161d7e2bc008e361625b#7  score=0.0164  [dense_rank=0, rrf=0.01639344262295082, sim=0.5472, rerank=0, norm=0.5472]  integrations/mcp/config.py
+[00:00:40] [RAG]   2. 5a49d570c6b338ecba6da557162e1dad2887c499#3  score=0.0161  [dense_rank=1, rrf=0.016129032258064516, sim=0.4883, rerank=1, norm=0.4883]  core/invariants.py
+[00:00:40] [RAG]   3. b6216ef6a3dc333b6a59b9e2d22ee1c9b9434809#44  score=0.0159  [dense_rank=2, rrf=0.015873015873015872, sim=0.488, rerank=2, norm=0.488]  dev/Проверка.md
+[00:00:40] [RAG]   4. db63ce0832be10d6e3ac0eb18696bc4f8a9198d7#9  score=0.0156  [dense_rank=3, rrf=0.015625, sim=0.4869, rerank=3, norm=0.4869]  ND/models/bge-m3_params.md
+[00:00:40] [RAG]   5. b6216ef6a3dc333b6a59b9e2d22ee1c9b9434809#1  score=0.0154  [dense_rank=4, rrf=0.015384615384615385, sim=0.4852, rerank=4, norm=0.4852]  dev/Проверка.md
+[00:00:46] [RAG] grounding: verdict=partial coverage=0.429 ссылок=0 чисел вне=0
+[00:00:46] [RAG] grounding: verdict=partial coverage=0.429 ссылок=0 чисел вне=0
+[00:00:46] [Память] short_term ← M6 (parent=M5) → /home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/users/gentest/tasks/Основная_задача/sessions/20261012_000029/session.json
+[00:00:46] [Агент] M3: ответ получен (доставка: ['invariants', 'long_term', 'profile', 'rag', 'short_term', 'working']; model=cloud/stepfun/step-3.5-flash)
+[00:00:46] [Память] short_term ← M7 (parent=M6) → /home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/users/gentest/tasks/Основная_задача/sessions/20261012_000029/session.json
+[00:00:46] [RAG] запрос «RAG» → 4 ист. (режим=hybrid, 98.9 мс):
+[00:00:46] [RAG]   1. 2180fabb3ba04a0c91cb6d515453f1a0421de70b#13  score=0.0179  [bm25_rank=6, dense_rank=0, rrf=0.017885979936383658, sim=0.5321, rerank=0, norm=0.5321]  core/prompt_builder.py
+[00:00:46] [RAG]   2. 2180fabb3ba04a0c91cb6d515453f1a0421de70b#17  score=0.0177  [bm25_rank=1, dense_rank=1, rrf=0.017741935483870968, sim=0.5212, rerank=1, norm=0.5212]  core/prompt_builder.py
+[00:00:46] [RAG]   3. b6216ef6a3dc333b6a59b9e2d22ee1c9b9434809#44  score=0.0175  [bm25_rank=0, dense_rank=2, rrf=0.017512360135310955, sim=0.4995, rerank=2, norm=0.4995]  dev/Проверка.md
+[00:00:46] [RAG]   4. b6216ef6a3dc333b6a59b9e2d22ee1c9b9434809#39  score=0.0172  [bm25_rank=2, dense_rank=3, rrf=0.01721230158730159, sim=0.4974, rerank=3, norm=0.4974]  dev/Проверка.md
+[00:00:57] [RAG] grounding: verdict=partial coverage=0.636 ссылок=2 чисел вне=0
+[00:00:57] [RAG] grounding: verdict=partial coverage=0.636 ссылок=2 чисел вне=0
+[00:00:57] [Память] short_term ← M8 (parent=M7) → /home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/users/gentest/tasks/Основная_задача/sessions/20261012_000029/session.json
+[00:00:57] [Агент] M4: ответ получен (доставка: ['invariants', 'long_term', 'profile', 'rag', 'short_term', 'working']; model=cloud/stepfun/step-3.5-flash)
+[00:03:07] [RAG] grounding: verdict=ok coverage=0.802 ссылок=3 чисел вне=0
+[00:03:07] [Память] working ← ['lifecycle_summary'] → /home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/users/gentest/tasks/Основная_задача/working_memory.json
+[00:03:07] [Память] remember(working) → working_memory.json ['lifecycle_summary']
+[00:05:02] [Хранилище] profile «default» = JSON в SQLite (таблица profiles, user_id=localgen)
+[00:05:02] [Память] profile «default» ← ['id', 'name', 'style', 'constraints', 'context'] → /home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/users/localgen/profiles/default.json (JSON в SQLite)
+[00:05:02] [Память] remember(profile) → profile.json (['id', 'name', 'style', 'constraints', 'context'])
+[00:05:02] [Память] working ← ['description'] → /home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/users/localgen/tasks/Основная_задача/working_memory.json
+[00:05:02] [Память] remember(working) → working_memory.json ['description']
+[00:05:02] [Память] long_term ← ['tasks'] → /home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/users/localgen/long_term_memory.json
+[00:05:02] [Память] remember(long_term) → long_term_memory.json ['tasks']
+[00:05:02] [Агент] Пользователь localgen инициализирован (интервью пройдено)
+[00:06:42] [RAG] grounding: verdict=partial coverage=0.25 ссылок=0 чисел вне=0
+[00:07:27] [RAG] grounding: verdict=ok coverage=0.7 ссылок=2 чисел вне=0
+[00:07:27] [Память] working ← ['lifecycle_summary'] → /home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/users/localgen/tasks/Основная_задача/working_memory.json
+[00:07:27] [Память] remember(working) → working_memory.json ['lifecycle_summary']

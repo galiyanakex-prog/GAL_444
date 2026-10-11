@@ -108,6 +108,13 @@ parser.add_argument("--subagent-service", type=str, default="lmstudio",
                     help="Сервис для субагента (по умолчанию lmstudio).")
 parser.add_argument("--local-only", action="store_true",
                     help="Запрет облачных моделей в этой сессии (и для субагентов).")
+parser.add_argument("--local-gen", action="store_true",
+                    help="RAG: retrieval локальный + генерация локальной моделью.")
+parser.add_argument("--gen-provider", type=str, default=None,
+                    choices=("cloud", "lmstudio", "ollama"),
+                    help="Явный генератор для RAG (по умолчанию из rag/config.json).")
+parser.add_argument("--gen-model", type=str, default=None, metavar="ID",
+                    help="Явная модель генератора RAG (id из models.json).")
 parser.add_argument("--fresh", action="store_true",
                     help="Не восстанавливать прошлое состояние (новая сессия).")
 parser.add_argument("--log", type=str, default="Den_log.md",
@@ -345,7 +352,8 @@ def build_agent(user_id=None, mock=False, mcp_enabled=False, scheduler_enabled=F
     if rag_enabled:
         try:
             cfg = rag_config or _build_rag_config(args)
-            service = _make_rag_service(cfg)
+            gen_llm = _build_gen_llm(cfg, mock=mock)
+            service = _make_rag_service(cfg, llm=gen_llm)
             agent.rag_service = service
             agent.rag_enabled = True
             agent.rag_top_k = cfg.retrieval.final_k
@@ -724,6 +732,16 @@ def _build_rag_config(cli_args):
     if cli_args.rag_multi_query:
         patch["retrieval"] = dataclasses.replace(
             patch.get("retrieval", cfg.retrieval), multi_query=True)
+    # Генератор RAG (этап 5): --local-gen → lmstudio; --gen-provider/--gen-model.
+    gen = cfg.generation
+    if getattr(cli_args, "local_gen", False):
+        gen = dataclasses.replace(gen, provider="lmstudio")
+    if getattr(cli_args, "gen_provider", None):
+        gen = dataclasses.replace(gen, provider=cli_args.gen_provider)
+    if getattr(cli_args, "gen_model", None):
+        gen = dataclasses.replace(gen, model=cli_args.gen_model)
+    if gen != cfg.generation:
+        patch["generation"] = gen
     if patch:
         cfg = dataclasses.replace(cfg, **patch)
 
@@ -736,10 +754,50 @@ def _build_rag_config(cli_args):
     return cfg.validate()
 
 
-def _make_rag_service(cfg):
-    """Фасад RagService поверх конфига (единственная точка входа ядра в rag/)."""
+def _make_rag_service(cfg, llm=None):
+    """Фасад RagService поверх конфига (единственная точка входа ядра в rag/).
+
+    `llm` — callable(messages)->str (генератор RAG, этап 5); None → заглушка.
+    """
     from rag.service import RagService
-    return RagService(cfg, log=log_line)
+    return RagService(cfg, log=log_line, llm=llm)
+
+
+def _build_gen_client(cfg, mock=False):
+    """Строит LLMClient-генератор RAG по cfg.generation через ModelRegistry (этап 5).
+
+    Возвращает (client, label) либо (None, None) (облако без ключа — заглушка).
+    Смену модели внутри rag/ не делаем: клиент строит Kod.py, в RagService уходит
+    callable. `label` — единая подпись модели для CLI/лога.
+    """
+    if mock:
+        from core.llm_client import MockClient
+        return MockClient(), "mock"
+    provider = cfg.generation.provider
+    if provider == "cloud":
+        api_key = os.getenv("API_KEY")
+        if not api_key or api_key == "test-key":
+            return None, None
+        from core.llm_client import RouterAIClient
+        return RouterAIClient(), "cloud/stepfun/step-3.5-flash"
+    # Локальный генератор: id из cfg.generation.model либо первый chat-спек сервиса.
+    registry = ModelRegistry(MODELS_PATH, log=log_line)
+    model_id = cfg.generation.model
+    if model_id:
+        spec = registry.get(model_id)
+    else:
+        spec = next((s for s in registry.list(role="chat") if s.service == provider), None)
+        if spec is None:
+            raise ValueError(f"нет chat-модели сервиса «{provider}» в реестре")
+    if cfg.generation.profile and cfg.generation.profile != spec.profile:
+        spec = dataclasses.replace(spec, profile=cfg.generation.profile)
+    return registry.build(spec), spec.display()
+
+
+def _build_gen_llm(cfg, mock=False):
+    """callable(messages)->str для RagService (обёртка над _build_gen_client)."""
+    client, _ = _build_gen_client(cfg, mock=mock)
+    return client.complete if client is not None else None
 
 
 def _print_rag_hits(hits, header: str):
@@ -862,15 +920,18 @@ def _load_queries(path):
 
 
 def _rag_llm_callable(cli_args):
-    """LLM для one-shot ответа: MockClient в --mock, иначе RouterAI. None — заглушка."""
-    if getattr(cli_args, "mock", False):
-        from core.llm_client import MockClient
-        return MockClient().complete
-    api_key = os.getenv("API_KEY")
-    if not api_key or api_key == "test-key":
+    """LLM для one-shot ответа RAG: по cfg.generation (этап 5).
+
+    --mock → MockClient; cloud без ключа → None (заглушка); локальный сервис →
+    клиент из ModelRegistry. Смену модели внутри rag/ не делаем.
+    """
+    cfg = _build_rag_config(cli_args)
+    try:
+        return _build_gen_llm(cfg, mock=getattr(cli_args, "mock", False))
+    except Exception as error:
+        print(f"[RAG] генератор не собран ({type(error).__name__}: {error}) — заглушка",
+              file=sys.stderr)
         return None
-    from core.llm_client import RouterAIClient
-    return RouterAIClient().complete
 
 
 def run_rag_eval(cli_args) -> int:
@@ -914,7 +975,8 @@ def run_rag_compare(cli_args) -> int:
 def _ensure_rag_service(agent: Agent):
     """Собрать RagService в рантайме (RAG включили в чате без флага --rag)."""
     cfg = _build_rag_config(args)
-    agent.rag_service = _make_rag_service(cfg)
+    gen_llm = _build_gen_llm(cfg, mock=args.mock)
+    agent.rag_service = _make_rag_service(cfg, llm=gen_llm)
     agent.rag_top_k = cfg.retrieval.final_k
     agent.rag_mode = cfg.retrieval.mode
     return agent.rag_service
@@ -1360,6 +1422,46 @@ def handle_subagent_command(agent: Agent, user_input: str):
           f"См. /subagent [run|list|log]\n")
 
 
+# 9.3 Генератор RAG (Ревизия 8, этап 5): /gen local|cloud|status -----------------
+def handle_gen_command(agent: Agent, user_input: str):
+    """Диспетчер /gen: local | cloud | status — кто генерирует ответ RAG."""
+    parts = user_input.split()
+    sub = parts[1] if len(parts) > 1 else "status"
+
+    if sub == "status":
+        service = agent.rag_service
+        if service is None:
+            print("[Генератор] RAG-слой выключен (--rag или /rag on).\n")
+            return
+        gen = service.cfg.generation
+        print(f"[Генератор] RAG: provider={gen.provider}, "
+              f"model={gen.model or '(по умолчанию сервиса)'}, профиль={gen.profile}")
+        print(f"  LLM-инжект: {'есть' if service.llm is not None else 'нет (заглушка)'}\n")
+        return
+
+    if sub in ("local", "cloud"):
+        provider = "lmstudio" if sub == "local" else "cloud"
+        cfg = _build_rag_config(args)
+        cfg = dataclasses.replace(
+            cfg, generation=dataclasses.replace(cfg.generation, provider=provider))
+        try:
+            client, label = _build_gen_client(cfg, mock=args.mock)
+        except Exception as error:
+            print(f"[Генератор] ⚠ Не удалось собрать генератор «{provider}»: {error}\n")
+            return
+        service = agent.rag_service or _ensure_rag_service(agent)
+        service.cfg = cfg
+        service.llm = client.complete if client is not None else None
+        # Одна точка: генератор RAG и основной LLM агента совпадают (без расхождений).
+        if client is not None:
+            agent.set_model(client, label=label)
+        print(f"[Генератор] RAG переключён на «{provider}» "
+              f"({'локально' if provider != 'cloud' else 'облако'}).\n")
+        return
+
+    print(f"[Генератор] Неизвестная подкоманда: {sub}. См. /gen [local|cloud|status]\n")
+
+
 # 10. Печать справки ---------------------------------------------------------------
 def print_help():
     print("[Справка] Доступные команды:")
@@ -1420,6 +1522,8 @@ def print_help():
     print("                       — поднять вспомогательную CLI-сессию на локальной LLM")
     print("  /subagent list       — активные/завершённые субагенты и их логи")
     print("  /subagent log <id>   — показать лог субагента (с его подписью модели)")
+    print("  /gen [status]        — кто генерирует ответ RAG (provider/model/профиль)")
+    print("  /gen local|cloud     — переключить генератор RAG (локально/облако)")
     print("  /help                — эта справка")
     print("  /exit                — завершить и сохранить состояние")
     print()
@@ -1792,6 +1896,22 @@ def main():
             else:
                 print("[Модель] ⚠ --local-only: локальных chat-моделей нет в реестре.")
 
+    # Флаг --local-gen (Ревизия 8, этап 5): полностью локальный RAG — генератор
+    # ответа тоже локальный. Одна точка: и agent.llm, и rag_service.llm.
+    if args.local_gen:
+        registry = getattr(agent, "model_registry", None)
+        if registry is not None:
+            local_spec = next((s for s in registry.list(role="chat") if s.local), None)
+            if local_spec is not None:
+                client = registry.build(local_spec)
+                agent.set_model(client, label=local_spec.display())
+                registry.current_id = local_spec.id
+                if agent.rag_service is not None:
+                    agent.rag_service.llm = client.complete
+                print(f"[Генератор] --local-gen: RAG генерирует {local_spec.display()}")
+            else:
+                print("[Генератор] ⚠ --local-gen: локальных chat-моделей нет в реестре.")
+
     # Накопительный трекер токенов сессии (локальная оценка).
     exchange_tracker = {"n": 0, "tokens": 0, "cost": 0.0}
 
@@ -2029,6 +2149,9 @@ def main():
                     continue
                 if command == "/subagent":
                     handle_subagent_command(agent, user_input)
+                    continue
+                if command == "/gen":
+                    handle_gen_command(agent, user_input)
                     continue
                 if command == "/exit":
                     stop_scheduler(agent)

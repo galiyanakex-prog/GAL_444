@@ -537,8 +537,10 @@ README.md + dev/Проверка.md  ← окончательное описан
      `answer(question, use_rag=True, llm=None)` использует переданный `llm`, иначе —
      `self.llm`; **смену модели не делаем внутри `rag/`** (реестр знает только `Kod.py`).
   2. `rag/config.json` → секция `generation`: `{"provider": "cloud", "model": null,
-     "profile": "default"}`; переопределение `--gen-provider`, `--gen-model`,
-     `AI9_GEN_PROVIDER`.
+     "profile": null}`; переопределение `--gen-provider`, `--gen-model`,
+     `AI9_GEN_PROVIDER`, `AI9_GEN_MODEL`. `profile: null` = «профиль самой модели из
+     реестра» (напр. `rag-strict` у боевой 3B); иначе профиль перезаписывается и
+     локальная модель генерирует без лимита токенов (упирается в таймаут).
   3. Флаг `--local-gen` (и REPL `/gen local`): собирает клиента из `ModelRegistry`
      и подставляет в `agent.llm` **и** `rag_service.llm` — одна точка, без расхождений.
   4. Полный локальный контур: `--rag --local-gen` ⇒ эмбеддинги Ollama + retrieval
