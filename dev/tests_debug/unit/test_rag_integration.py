@@ -61,7 +61,10 @@ class FakeRag:
             raise self.error
         return self.hits
 
-    def context_block(self, query="", k=None, budget=None, hits=None, mode=None):
+    def context_block(self, query="", k=None, budget=None, hits=None, mode=None,
+                      block_renderer=None):
+        if block_renderer is not None:
+            return block_renderer(hits if hits is not None else self.hits, query)
         return render_rag(hits if hits is not None else self.hits)
 
     def sources_for(self, hits):

@@ -207,22 +207,28 @@ def _citations_valid(text: str, hits: list) -> tuple:
 
 
 def compare_generators(cfg, queries, generators, k: int = 5, repeat: int = 1,
-                       threshold: float = None) -> dict:
+                       threshold: float = None, block_renderers: dict = None) -> dict:
     """Прогнать контрольные вопросы разными генераторами (часть 3, этап 6).
 
     `generators` — dict {имя: callable(messages)->str} (DI). Различается только
     генератор: retrieval/индекс общие. `repeat` — число повторов на вопрос (для
-    оси «стабильность»). Возвращает {"rows", "summary", "divergences", "verdict"}.
+    оси «стабильность»). `block_renderers` (часть 4, этап 7) — dict
+    {имя: callable(hits, query)->str} для сборки блока [rag] иным шаблоном
+    (напр. строгий локальный); отсутствие имени → общий шаблон.
+    Возвращает {"rows", "summary", "divergences", "verdict"}.
     """
     from rag.service import RagService
     query_list = queries if isinstance(queries, list) else load_queries(queries)
     repeat = max(1, int(repeat))
+    block_renderers = block_renderers or {}
     rows = []
     for name, llm in generators.items():
         svc = RagService(cfg, llm=llm)
+        renderer = block_renderers.get(name)
         for q in query_list:
             for run in range(repeat):
-                ans = svc.answer(q["query"], use_rag=True, k=k, threshold=threshold)
+                ans = svc.answer(q["query"], use_rag=True, k=k, threshold=threshold,
+                                 block_renderer=renderer)
                 text = ans.text or ""
                 must = q.get("must_contain", [])
                 hit_must = sum(1 for m in must if m.lower() in text.lower())
@@ -349,9 +355,13 @@ def _generator_verdict(summary) -> str:
     return " · ".join(p for p in parts if p)
 
 
-def render_generator_report(result) -> str:
-    """Markdown-отчёт сравнения генераторов (три оси + вердикт + расхождения)."""
-    lines = ["# Сравнение локальной и облачной генерации RAG (этап 6, G2)", ""]
+def render_generator_report(result, title: str = None) -> str:
+    """Markdown-отчёт сравнения генераторов (три оси + вердикт + расхождения).
+
+    `title` — заголовок отчёта (этап 6 — сравнение cloud/local; этап 7 — замер
+    «до/после» оптимизации). По умолчанию — заголовок этапа 6.
+    """
+    lines = [title or "# Сравнение локальной и облачной генерации RAG (этап 6, G2)", ""]
     lines.append(f"k = {result['k']} · повторов на вопрос = {result['repeat']} · "
                  f"вопросов = {len({r['id'] for r in result['rows']})}")
     lines.append("")

@@ -138,6 +138,70 @@ def render_rag(hits, budget: int = 1400, estimator=None, max_chars: int = 700) -
     return "\n".join(lines)
 
 
+# Строгий prompt-шаблон блока [rag] для ЛОКАЛЬНЫХ моделей (часть 4, этап 7).
+# Отличия от общего RAG_INSTRUCTIONS: жёсткое «только источники, иначе не знаю»,
+# единая форма ссылки, лимит длины ответа, запрет рассуждений вне источников,
+# few-shot пример. Включается ТОЛЬКО для local-моделей и ТОЛЬКО при активном RAG;
+# BLOCK_ORDER не меняется (блок тот же — [rag]).
+LOCAL_RAG_INSTRUCTIONS = (
+    "Правила ответа (соблюдай строго):\n"
+    "1. Отвечай ТОЛЬКО по приведённым источникам; ничего не добавляй от себя.\n"
+    "2. Каждое утверждение помечай ссылкой ровно в форме [doc_id#chunk_id] — "
+    "один раз, без повторов doc_id внутри ссылки.\n"
+    "3. Если в источниках нет ответа — ответь ровно: «В источниках нет ответа на "
+    "этот вопрос.»\n"
+    "4. Не рассуждай вне источников, не пересказывай вопрос, не пиши вступлений.\n"
+    "5. Ответ — не длиннее 5 предложений."
+)
+
+LOCAL_RAG_EXAMPLE = (
+    "Пример:\n"
+    "Вопрос: <вопрос>\n"
+    "Ответ: <краткий ответ строго по источникам> [doc_id#chunk_id]."
+)
+
+
+def render_local_rag_template(hits, query: str = "", profile: str = None,
+                              budget: int = 1400, estimator=None,
+                              max_chars: int = 700) -> str:
+    """Строгий prompt-шаблон блока [rag] для ЛОКАЛЬНЫХ моделей (часть 4, этап 7).
+
+    Тот же блок [rag] (BLOCK_ORDER не меняется), но инструкция жёстче: только
+    источники, единая форма ссылки, лимит длины, запрет рассуждений, few-shot.
+    Включается только для local-моделей при активном RAG. `query`/`profile`
+    принимаются для совместимости с точкой вызова (в тексте не дублируются:
+    вопрос уже идёт блоком [current]).
+    """
+    if not hits:
+        return ""
+    estimator = estimator or (lambda text: max(1, len(text) // 4))
+    lines = ["Найденные источники (отвечай строго по ним):"]
+    used = estimator("\n".join(lines))
+    n_placed = 0
+    for num, hit in enumerate(hits, 1):
+        ref = f"[{getattr(hit, 'doc_id', '')}#{getattr(hit, 'chunk_id', '')}]"
+        where = getattr(hit, "source", "") or ""
+        section = getattr(hit, "section", "") or ""
+        title = getattr(hit, "title", "") or ""
+        fragment = " ".join((getattr(hit, "text", "") or "").split())[:max_chars]
+        entry = [f"{num}. {ref} {where}" + (f" · {title}" if title else "")
+                 + (f" · раздел: {section}" if section else ""),
+                 f"    {fragment}"]
+        cost = estimator("\n".join(entry))
+        if used + cost > budget:
+            continue
+        lines.extend(entry)
+        used += cost
+        n_placed += 1
+    if not n_placed:
+        return ""
+    lines.append("")
+    lines.append(LOCAL_RAG_INSTRUCTIONS)
+    lines.append("")
+    lines.append(LOCAL_RAG_EXAMPLE)
+    return "\n".join(lines)
+
+
 class PromptBuilder:
     def __init__(self, role_prompt: str, token_estimator=None):
         self.role_prompt = role_prompt

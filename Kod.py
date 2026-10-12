@@ -181,6 +181,12 @@ parser.add_argument("--repeat", type=int, default=1,
                     help="Повторов на вопрос для --rag-gen-compare (ось стабильности).")
 parser.add_argument("--gen-report", type=str, default=None, metavar="FILE",
                     help="Путь отчёта --rag-gen-compare (по умолчанию stages/rag_local_compare.md).")
+parser.add_argument("--gen-profile", type=str, default=None, metavar="NAME",
+                    help="Профиль параметров генератора RAG (default/rag-strict/fast) "
+                         "для --rag-gen-compare (этап 7).")
+parser.add_argument("--local-template", action="store_true",
+                    help="С --rag-gen-compare: строгий prompt-шаблон [rag] для "
+                         "локального генератора (часть 4, этап 7).")
 parser.add_argument("--rag-mode", type=str, default=None,
                     choices=("bm25", "dense", "hybrid"),
                     help="Режим ретривера (по умолчанию из rag/config.json: hybrid).")
@@ -309,6 +315,8 @@ def build_agent(user_id=None, mock=False, mcp_enabled=False, scheduler_enabled=F
                   default_task="Основная_задача", log=log_line, executor=executor)
     agent.set_model(client, label=model_label)
     agent.model_registry = registry
+    # Шаблон блока [rag] по локальности модели (часть 4, этап 7): для облака — None.
+    _apply_local_rag_template(agent)
 
     # MCP-слой (День 16): только при явном включении; MCP off по умолчанию.
     if mcp_enabled:
@@ -771,6 +779,37 @@ def _make_rag_service(cfg, llm=None):
     return RagService(cfg, log=log_line, llm=llm)
 
 
+def _local_rag_renderer():
+    """callable(hits, query)->str — строгий шаблон блока [rag] для локальных моделей.
+
+    Часть 4 (этап 7): шаблон живёт в core/prompt_builder.py; в rag/ уходит как DI
+    (граница §5 — rag/ не импортирует core/). Возвращает None, если шаблон
+    недоступен (деградация к общему блоку).
+    """
+    try:
+        from core.prompt_builder import render_local_rag_template
+    except Exception:
+        return None
+    return lambda hits, query="": render_local_rag_template(hits, query=query)
+
+
+def _apply_local_rag_template(agent: Agent) -> None:
+    """Включить строгий шаблон [rag] ТОЛЬКО для локальной модели (часть 4, этап 7).
+
+    Облачный промпт остаётся байт-в-байт прежним: для облака renderer = None.
+    Вызывается после каждого переключения модели (старт, /model use, /gen, флаги).
+    """
+    registry = getattr(agent, "model_registry", None)
+    if registry is None:
+        agent.rag_block_renderer = None
+        return
+    try:
+        is_local = registry.current().local
+    except Exception:
+        is_local = False
+    agent.rag_block_renderer = _local_rag_renderer() if is_local else None
+
+
 def _build_gen_client(cfg, mock=False):
     """Строит LLMClient-генератор RAG по cfg.generation через ModelRegistry (этап 5).
 
@@ -994,16 +1033,21 @@ def run_rag_gen_compare(cli_args) -> int:
         print("[RAG] Индекс пуст — сначала: python Kod.py --rag-ingest", file=sys.stderr)
         return 1
     modes = [m.strip() for m in cli_args.gen_modes.split(",") if m.strip()]
+    # Профиль параметров генератора (этап 7): --gen-profile переопределяет профиль
+    # модели в cfg.generation (None → профиль самой модели из реестра).
+    gen_profile = getattr(cli_args, "gen_profile", None)
     generators = {}
     for mode in modes:
         if mode == "cloud":
+            gen = dataclasses.replace(cfg.generation, provider="cloud",
+                                      profile=gen_profile)
             client, _ = _build_gen_client(
-                dataclasses.replace(cfg, generation=dataclasses.replace(
-                    cfg.generation, provider="cloud")), mock=cli_args.mock)
+                dataclasses.replace(cfg, generation=gen), mock=cli_args.mock)
         elif mode == "local":
+            gen = dataclasses.replace(cfg.generation, provider="lmstudio",
+                                      profile=gen_profile)
             client, _ = _build_gen_client(
-                dataclasses.replace(cfg, generation=dataclasses.replace(
-                    cfg.generation, provider="lmstudio")), mock=cli_args.mock)
+                dataclasses.replace(cfg, generation=gen), mock=cli_args.mock)
         else:
             print(f"[RAG] Неизвестный генератор «{mode}» (cloud|local).", file=sys.stderr)
             return 2
@@ -1015,13 +1059,28 @@ def run_rag_gen_compare(cli_args) -> int:
     if not generators:
         print("[RAG] Ни один генератор не собран — сравнение невозможно.", file=sys.stderr)
         return 1
+    # Строгий шаблон [rag] для локального генератора (часть 4, этап 7).
+    block_renderers = {}
+    if getattr(cli_args, "local_template", False) and "local" in generators:
+        renderer = _local_rag_renderer()
+        if renderer is not None:
+            block_renderers["local"] = renderer
     dataset = os.path.join(BASE_DIR, "rag", "datasets", "queries.jsonl")
     queries = [q for q in _load_queries(dataset) if q.get("id", "").startswith("c")][:10]
     print(f"[RAG] Сравнение генераторов {list(generators)} на {len(queries)} вопросах, "
           f"повторов={cli_args.repeat}. Локальная генерация на CPU — это долго.")
+    if block_renderers:
+        print(f"[RAG] Строгий шаблон [rag] применён к: {list(block_renderers)}.")
     result = compare_generators(cfg, queries, generators, k=cfg.retrieval.final_k,
-                                repeat=cli_args.repeat)
-    text = render_generator_report(result)
+                                repeat=cli_args.repeat, block_renderers=block_renderers)
+    # Заголовок отчёта: этап 7 (оптимизация) — если задан профиль/строгий шаблон.
+    if gen_profile or block_renderers:
+        title = ("# Оптимизация генерации RAG: замер «до/после» (этап 7, P1)\n\n"
+                 f"Профиль: `{gen_profile or 'default'}` · строгий шаблон [rag]: "
+                 f"{'да' if block_renderers else 'нет'}")
+    else:
+        title = None
+    text = render_generator_report(result, title=title)
     report_path = cli_args.gen_report or os.path.join(
         BASE_DIR, "dev", "logs_reports", "stages", "rag_local_compare.md")
     os.makedirs(os.path.dirname(report_path), exist_ok=True)
@@ -1341,6 +1400,7 @@ def handle_model_command(agent: Agent, user_input: str):
         registry.use(model_id, user_dir=agent.store.user_dir(agent.user_id)
                      if agent.user_id else None)
         agent.set_model(client, label=spec.display())
+        _apply_local_rag_template(agent)
         print(f"[Модель] Переключено: {spec.display()}")
         print(model_banner(agent) + "\n")
         return
@@ -1368,6 +1428,7 @@ def handle_model_command(agent: Agent, user_input: str):
         spec.profile = name
         client = registry.build(spec)
         agent.set_model(client, label=spec.display())
+        _apply_local_rag_template(agent)
         print(f"[Модель] Профиль «{name}» применён к {spec.display()}\n")
         return
 
@@ -1515,6 +1576,7 @@ def handle_gen_command(agent: Agent, user_input: str):
         # Одна точка: генератор RAG и основной LLM агента совпадают (без расхождений).
         if client is not None:
             agent.set_model(client, label=label)
+            _apply_local_rag_template(agent)
         print(f"[Генератор] RAG переключён на «{provider}» "
               f"({'локально' if provider != 'cloud' else 'облако'}).\n")
         return
@@ -1953,6 +2015,7 @@ def main():
             if local_spec is not None:
                 agent.set_model(registry.build(local_spec), label=local_spec.display())
                 registry.current_id = local_spec.id
+                _apply_local_rag_template(agent)
                 print(f"[Модель] --local-only: переключено на {local_spec.display()}")
             else:
                 print("[Модель] ⚠ --local-only: локальных chat-моделей нет в реестре.")
@@ -1967,6 +2030,7 @@ def main():
                 client = registry.build(local_spec)
                 agent.set_model(client, label=local_spec.display())
                 registry.current_id = local_spec.id
+                _apply_local_rag_template(agent)
                 if agent.rag_service is not None:
                     agent.rag_service.llm = client.complete
                 print(f"[Генератор] --local-gen: RAG генерирует {local_spec.display()}")
@@ -2015,6 +2079,7 @@ def main():
             spec = registry.current()
             spec.profile = args.model_profile
             agent.set_model(registry.build(spec), label=spec.display())
+            _apply_local_rag_template(agent)
             print(f"[Модель] Профиль «{args.model_profile}» применён.")
         else:
             print(f"[Модель] ⚠ Профиль «{args.model_profile}» не найден — использую default.")

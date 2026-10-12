@@ -242,6 +242,10 @@ class Agent:
         self.rag_block_enabled = True
         self.rag_top_k = None          # None → cfg.retrieval.final_k
         self.rag_mode = None           # None → cfg.retrieval.mode
+        # Шаблон блока [rag] (часть 4, этап 7): callable(hits, query)->str для
+        # локальных моделей (строгий шаблон). None → общий шаблон. Ставит Kod.py
+        # по локальности текущей модели; rag/ не импортирует core/ (DI).
+        self.rag_block_renderer = None
         # Последние найденные чанки (для /rag check на этапе 9 и объяснимости).
         self.last_rag_hits = []
         # Метаданные последнего ответа (часть 3, этап 10): источники/цитаты/вердикт.
@@ -843,7 +847,8 @@ class Agent:
         hits = self._rag_retrieve(query)
         if hits and self.rag_block_enabled:
             try:
-                rag_block = self.rag_service.context_block(query, hits=hits)
+                rag_block = self.rag_service.context_block(
+                    query, hits=hits, block_renderer=self.rag_block_renderer)
             except Exception as exc:
                 self.log(f"[RAG] блок не собран ({type(exc).__name__}: {exc}) — блок опущен")
                 rag_block = ""

@@ -207,7 +207,7 @@ class RagService:
     # ---------- ответ RAG (часть 1, этап 7; часть 3, этап 9) ----------
     def answer(self, question: str, use_rag: bool = True, k: int = None,
                mode: str = None, threshold: float = None, llm=None,
-               grounding: str = None) -> "Answer":
+               grounding: str = None, block_renderer=None) -> "Answer":
         """Функция части 1: вопрос → поиск → объединение → LLM → Answer.
 
         `llm` — callable(messages) -> str (DI из агента; rag/ НЕ импортирует core/).
@@ -217,6 +217,10 @@ class RagService:
         Часть 3: ответ несёт обязательные `sources`/`quotes`; при слабом контексте
         (нет хитов или всё ниже порога) — режим «не знаю» (`verdict=insufficient`)
         БЕЗ вызова LLM. `grounding` — переопределение режима (off|warn|strict).
+
+        `block_renderer` (часть 4, этап 7) — callable(hits, query)->str для сборки
+        блока [rag] иным шаблоном (напр. строгий локальный). None → общий шаблон.
+        Граница §5 сохранена: rag/ не импортирует core/, шаблон приходит как DI.
         """
         from rag.sources import build_sources
         from rag.types import Answer
@@ -231,7 +235,7 @@ class RagService:
                           latency_ms=round((time.time() - started) * 1000, 1))
         prompt = question
         if hits:
-            block = self.context_block(hits=hits, k=k)
+            block = self.context_block(hits=hits, k=k, block_renderer=block_renderer)
             if block:
                 prompt = f"{question}\n\n{block}"
         text = _llm_complete(prompt, llm)
@@ -269,17 +273,22 @@ class RagService:
 
     # ---------- блок промпта ----------
     def context_block(self, query: str = "", k: int = None, budget: int = None,
-                      hits: list = None, mode: str = None) -> str:
+                      hits: list = None, mode: str = None,
+                      block_renderer=None) -> str:
         """Готовый текст блока [rag] (нумерованные источники + инструкция).
 
         `hits` передаются извне, чтобы на один запрос был ОДИН поиск (агент уже
         нашёл чанки и кладёт их в last_rag_hits). Иначе — ищем по `query`.
+        `block_renderer` — callable(hits, query)->str (DI, часть 4): иной шаблон
+        блока (напр. строгий локальный). None → общий шаблон `_render_block`.
         """
         if hits is None:
             hits = self.search(query, k=k, mode=mode)
         if not hits:
             return ""
         budget = budget or self.cfg.budget.max_rag_tokens
+        if block_renderer is not None:
+            return block_renderer(hits, query)
         return _render_block(hits, budget)
 
     # ---------- статистика ----------

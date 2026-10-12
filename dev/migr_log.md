@@ -513,7 +513,7 @@
 
 ### Коммит
 
-- Предложен оператору (текст — в ШАГЕ 6.5 плана 6); выполнен оператором — хеш: _(ожидается)_.
+- Предложен оператору (текст — в ШАГЕ 6.5 плана 6); выполнен оператором — хеш: `3a7361c`.
 
 ### Перечитывание migr_plan.md
 
@@ -524,3 +524,42 @@
 - ✅ (отчёт с тремя осями есть; локальный режим работоспособен — 30/30 ответов с
   валидными источниками; вердикт + разбор расхождений есть; офлайн-регрессия зелёная;
   `requirements.txt` без изменений)
+
+---
+
+## Этап 7 — Профиль оптимизации: параметры + prompt-шаблон (цель: P1)
+
+- Статус: ✅ завершён
+- Было: параметры генерации не переопределялись профилем (`default` — пустой);
+  prompt-шаблон блока [rag] был единым для облака и локальной модели; замер «до»
+  отсутствовал.
+- Стало: три профиля (`default`/`rag-strict`/`fast`) накладываются на спек и уходят
+  в тело запроса (LM Studio — `temperature`/`max_tokens`/`top_p`; Ollama — `options`);
+  строгий prompt-шаблон `render_local_rag_template` включается **только** для локальной
+  модели при активном RAG; облачный промпт не затронут (renderer=None → общий блок).
+- Живой прогон: `python Kod.py --rag-gen-compare --gen-modes local --gen-profile default
+  --repeat 3` (боевая `Qwen2.5-Coder-3B-…-Q6_K` через LM Studio `127.0.0.1:1234`,
+  loopback-only) → exit 0; отчёт `dev/logs_reports/stages/optimize_before.md`.
+- Офлайн без сети: подтверждено (loopback-only; внешних запросов нет).
+- Метрики (замер «до», профиль `default` + общий промпт): must_contain 0.5439;
+  источники 30/30; ссылки валид. 50/68; медиана 247682.6 мс / p95 600100.6 мс;
+  1.9 ток/с; ошибок 2; согласованность 3/10.
+- Регрессия: unit_runner 360 OK / 0 FAIL; smoke SMOKE OK; scenario SCENARIO OK;
+  check_acceptance 43 из 43 (FAIL=0); pytest 361 passed.
+- Артефакты:
+  - `core/prompt_builder.py` — `render_local_rag_template`, `LOCAL_RAG_INSTRUCTIONS`,
+    `LOCAL_RAG_EXAMPLE`;
+  - `core/model_registry.py` — `with_profile` бросает `KeyError` со списком профилей;
+  - `core/agent.py` — поле `rag_block_renderer` (DI-шаблон блока [rag]);
+  - `rag/service.py` — `answer`/`context_block` принимают `block_renderer`;
+  - `rag/compare.py` — `compare_generators(..., block_renderers)`,
+    `render_generator_report(..., title)`;
+  - `Kod.py` — `_local_rag_renderer`, `_apply_local_rag_template`, флаги
+    `--gen-profile`/`--local-template`, заголовок отчёта этапа 7;
+  - `dev/tests_debug/unit/test_llm_optimize.py` — создан (15 тестов);
+  - `dev/logs_reports/stages/optimize_before.md` — замер «до».
+- Коммит: предложен оператору (текст — в ШАГЕ 7.5 плана 7); выполнен оператором — хеш: _(ожидается)_.
+- Перечитывание migr_plan.md: ✅ (2026-10-12)
+- Гейт 7→8: ✅ (три профиля загружаются; «до» замерено; параметры в теле запроса —
+  тест зелёный; облачный промпт байт-в-байт прежний; офлайн-регрессия без изменений;
+  `requirements.txt` без изменений; запись «Этап 7» + перечитывание плана)

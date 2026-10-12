@@ -51,7 +51,15 @@ class ModelSpec:
         return self.label or f"{self.service}/{self.model}"
 
     def with_profile(self, profiles: dict) -> "ModelSpec":
-        """Возвращает копию спека с параметрами выбранного профиля."""
+        """Возвращает копию спека с параметрами выбранного профиля.
+
+        Неизвестный профиль → KeyError со списком доступных (часть 4, этап 7):
+        молчаливое падение к дефолту скрыло бы опечатку в имени профиля.
+        """
+        if self.profile not in profiles:
+            available = ", ".join(sorted(profiles)) or "(нет профилей)"
+            raise KeyError(
+                f"Профиль «{self.profile}» не найден. Доступны: {available}")
         overrides = dict(profiles.get(self.profile, {}))
         params = dict(self.params)
         for key in ("temperature", "max_tokens", "top_p", "num_ctx", "keep_alive"):
