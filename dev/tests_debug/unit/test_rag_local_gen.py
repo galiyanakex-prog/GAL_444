@@ -1,12 +1,11 @@
 # -*- coding: utf-8 -*-
-"""Юнит-тесты локальной генерации в RAG (Ревизия 8, этап 5).
+"""Юнит-тесты генератора RAG (Ревизия 8, этап 5; уточнение куратора 2026-10-12).
 
-Без сети: генератор подменяется фейковым callable (счётчик вызовов). Проверяем
-контракты: явный `llm`-инжект в `RagService`; `answer` использует инжектированный
-генератор; блок `[rag]` и источники/цитаты сохраняются как с облаком; пустой
-индекс → «не знаю» без падения; секция `generation` в конфиге (JSON + env);
-`_build_gen_llm` строит локального клиента из реестра и падает понятно при
-неизвестном сервисе.
+Генератор RAG = текущая модель агента: отдельной секции `generation` в конфиге
+НЕТ. Проверяем контракты: явный `llm`-инжект в `RagService`; `answer` использует
+инжектированный генератор; блок `[rag]` и источники/цитаты сохраняются; пустой
+индекс → «не знаю» без падения; `_build_gen_llm` строит клиента из реестра;
+`/gen` и `/embed` переключают модель агента/эмбеддер; смена провайдера эмбеддинга.
 """
 import os
 import sys
@@ -18,9 +17,9 @@ sys.path.insert(0, BASE_DIR)
 sys.argv = [os.path.join(BASE_DIR, "Kod.py")]
 import Kod  # noqa: E402
 
-from rag.config import RagConfig, GenerationConfig, RagConfigError  # noqa: E402
+from rag.config import RagConfig  # noqa: E402
 from rag.corpus import discover  # noqa: E402
-from rag.embedding import HashingEmbedder  # noqa: E402
+from rag.embedding import HashingEmbedder, make_embedder  # noqa: E402
 from rag.index import RagIndex  # noqa: E402
 from rag.retrieval import Retriever  # noqa: E402
 from rag.service import RagService  # noqa: E402
@@ -53,40 +52,57 @@ def _service(llm=None):
     return svc
 
 
-# --- секция generation в конфиге -------------------------------------------------
+# --- генератор RAG = модель агента (секции generation в конфиге нет) -------------
 
-def test_generation_config_defaults():
+def test_config_has_no_generation_section():
+    """Секции `generation` в конфиге нет (одна точка выбора — модель агента)."""
     cfg = RagConfig.default()
-    assert isinstance(cfg.generation, GenerationConfig)
-    assert cfg.generation.provider == "cloud"
-    assert cfg.generation.model is None
-    assert cfg.generation.profile is None
+    assert not hasattr(cfg, "generation")
+    loaded = RagConfig.load(os.path.join(BASE_DIR, "rag/config.json"))
+    assert not hasattr(loaded, "generation")
 
 
-def test_generation_config_loaded_from_json():
-    cfg = RagConfig.load(os.path.join(BASE_DIR, "rag/config.json"))
-    assert cfg.generation.provider == "cloud"
-    assert cfg.generation.model is None
+def test_config_ignores_unknown_generation_key():
+    """Даже если в JSON остался `generation` — он игнорируется, не падаем."""
+    cfg = RagConfig.default().from_dict(
+        {"generation": {"provider": "bogus"}}).validate()
+    assert not hasattr(cfg, "generation")
 
 
-def test_generation_config_env_override():
-    os.environ["AI9_GEN_PROVIDER"] = "lmstudio"
-    os.environ["AI9_GEN_MODEL"] = "lmstudio:test"
+# --- переключаемый эмбеддер (роль «эмбеддинг») -----------------------------------
+
+def test_embedding_defaults_ollama_bge_m3():
+    cfg = RagConfig.default()
+    assert cfg.embedding.provider == "ollama"
+    assert cfg.embedding.model == "bge-m3"
+
+
+def test_embedding_lmstudio_provider_supported():
+    """Провайдер эмбеддингов не захардкожен: lmstudio — валидный вариант."""
+    from dataclasses import replace
+    emb = replace(RagConfig.default().embedding, provider="lmstudio",
+                  model="text-embedding-nomic-embed-text-v1.5", dim=768)
+    assert emb.provider == "lmstudio"
+
+
+def test_make_embedder_hashing_and_fake():
+    from dataclasses import replace
+    emb = replace(RagConfig.default().embedding, provider="hashing")
+    assert isinstance(make_embedder(emb), HashingEmbedder)
+
+
+def test_embedding_url_must_be_local():
+    """Границы модуля: внешний embedding-URL → RagConfigError."""
+    from dataclasses import replace
+    from rag.config import RagConfigError
+    cfg = replace(RagConfig.default(),
+                  embedding=replace(RagConfig.default().embedding,
+                                    url="http://example.com:11434"))
     try:
-        cfg = RagConfig.default().from_env()
-        assert cfg.generation.provider == "lmstudio"
-        assert cfg.generation.model == "lmstudio:test"
-    finally:
-        os.environ.pop("AI9_GEN_PROVIDER", None)
-        os.environ.pop("AI9_GEN_MODEL", None)
-
-
-def test_generation_config_invalid_provider():
-    try:
-        RagConfig.default().from_dict({"generation": {"provider": "bogus"}}).validate()
+        cfg.validate()
     except RagConfigError:
         return
-    raise AssertionError("невалидный генератор должен давать RagConfigError")
+    raise AssertionError("внешний embedding-URL должен давать RagConfigError")
 
 
 # --- явный llm-инжект в RagService ----------------------------------------------
@@ -144,43 +160,39 @@ def test_empty_index_returns_unknown_without_llm():
     assert fake.calls == 0
 
 
-# --- _build_gen_llm (сборка генератора из реестра) ------------------------------
+# --- _build_gen_llm (генератор = текущая модель агента из реестра) --------------
 
 def test_build_gen_llm_cloud_without_key_returns_none():
     """cloud без API_KEY → None (заглушка), без падения."""
-    cfg = RagConfig.default()
     saved = os.environ.pop("API_KEY", None)
     try:
-        assert Kod._build_gen_llm(cfg) is None
+        assert Kod._build_gen_llm(model_id="cloud:stepfun/step-3.5-flash") is None
     finally:
         if saved is not None:
             os.environ["API_KEY"] = saved
 
 
 def test_build_gen_llm_local_builds_client():
-    """lmstudio → клиент из реестра (callable.complete)."""
-    cfg = RagConfig.default().from_dict({"generation": {"provider": "lmstudio"}})
-    llm = Kod._build_gen_llm(cfg)
+    """lmstudio (явный id) → клиент из реестра (callable.complete)."""
+    llm = Kod._build_gen_llm(
+        model_id="lmstudio:Qwen2.5-Coder-3B-Instruct-Distill-Qwen3-Coder-Next-abliterated-Q6_K")
     assert callable(llm)
 
 
-def test_build_gen_llm_unknown_service_raises():
-    """Сервис без chat-модели в реестре → понятная ошибка."""
-    cfg = RagConfig.default().from_dict({"generation": {"provider": "ollama"}})
-    try:
-        Kod._build_gen_llm(cfg)
-    except ValueError as error:
-        assert "chat-модели" in str(error)
-        return
-    raise AssertionError("ожидался ValueError для сервиса без chat-модели")
+def test_build_gen_llm_current_default_is_callable_or_none():
+    """Без явного id берётся текущая модель агента (реестр)."""
+    llm = Kod._build_gen_llm()
+    # current = облако: без ключа → None; с ключом → callable. Оба варианта ок.
+    assert llm is None or callable(llm)
 
 
 # --- команда /gen (одна точка: agent.llm и rag_service.llm) ---------------------
 
 def _agent_with_rag(tmp_path):
-    """Агент на MockClient с подключённым RagService (без сети)."""
+    """Агент на MockClient с подключённым RagService и реестром (без сети)."""
     from core.agent import Agent
     from core.llm_client import MockClient
+    from core.model_registry import ModelRegistry
     from core.prompt_builder import PromptBuilder
     from memory.manager import MemoryManager, default_layers
     from storage.store import Store
@@ -189,6 +201,9 @@ def _agent_with_rag(tmp_path):
     memory = MemoryManager(default_layers(store), log=lambda line: None)
     agent = Agent(MockClient(name="Mock"), memory, PromptBuilder("sys"), store,
                   user_id="t")
+    registry = ModelRegistry(os.path.join(BASE_DIR, "models.json"))
+    registry.probe = lambda model_id: {"ok": True, "latency_ms": 1, "version": "test"}
+    agent.model_registry = registry
     agent.rag_service = _service()
     agent.rag_enabled = True
     return agent
@@ -201,15 +216,14 @@ def test_gen_local_switches_agent_and_service(tmp_path):
     agent = _agent_with_rag(tmp_path)
     with redirect_stdout(io.StringIO()):
         Kod.handle_gen_command(agent, "/gen local")
-    assert agent.rag_service.cfg.generation.provider == "lmstudio"
+    # Генератор RAG — та же модель агента (одна точка, без секции generation).
     assert agent.rag_service.llm is not None
-    # Основной LLM агента — тот же локальный клиент (одна точка).
     assert agent.llm is not None
     assert "lmstudio" in agent.model_label()
 
 
-def test_gen_status_reports_provider(tmp_path):
-    """`/gen status` печатает провайдера и наличие LLM-инжекта."""
+def test_gen_status_reports_current_model(tmp_path):
+    """`/gen status` печатает текущую модель агента и наличие LLM-инжекта."""
     import io
     from contextlib import redirect_stdout
     agent = _agent_with_rag(tmp_path)
@@ -217,5 +231,43 @@ def test_gen_status_reports_provider(tmp_path):
     with redirect_stdout(buffer):
         Kod.handle_gen_command(agent, "/gen status")
     out = buffer.getvalue()
-    assert "provider=cloud" in out
+    assert "моделью агента" in out
     assert "LLM-инжект" in out
+
+
+# --- команда /embed (переключаемый эмбеддер) ------------------------------------
+
+def test_embed_status_reports_provider(tmp_path):
+    """`/embed status` печатает провайдера/модель/dim текущего эмбеддера."""
+    import io
+    from contextlib import redirect_stdout
+    agent = _agent_with_rag(tmp_path)
+    buffer = io.StringIO()
+    with redirect_stdout(buffer):
+        Kod.handle_embed_command(agent, "/embed status")
+    out = buffer.getvalue()
+    assert "Провайдер:" in out
+    assert "bge-m3" in out
+
+
+def test_embed_use_hashing_switches_service(tmp_path):
+    """`/embed use hashing` пересобирает сервис с хэширующим эмбеддером."""
+    import io
+    from contextlib import redirect_stdout
+    agent = _agent_with_rag(tmp_path)
+    with redirect_stdout(io.StringIO()):
+        Kod.handle_embed_command(agent, "/embed use hashing")
+    assert agent.rag_service.cfg.embedding.provider == "hashing"
+
+
+def test_embed_use_unknown_provider_keeps_service(tmp_path):
+    """Неизвестный провайдер → предупреждение, прежний сервис сохранён."""
+    import io
+    from contextlib import redirect_stdout
+    agent = _agent_with_rag(tmp_path)
+    before = agent.rag_service
+    buffer = io.StringIO()
+    with redirect_stdout(buffer):
+        Kod.handle_embed_command(agent, "/embed use bogus")
+    assert agent.rag_service is before
+    assert "Неизвестный провайдер" in buffer.getvalue()

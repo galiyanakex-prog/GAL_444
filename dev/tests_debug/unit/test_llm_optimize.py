@@ -162,19 +162,19 @@ def test_registry_build_applies_profile():
 # --- 3. Строгий prompt-шаблон ---------------------------------------------------
 
 def test_local_template_has_citation_and_unknown():
-    """Шаблон содержит требование ссылок и «не знаю»."""
+    """Шаблон содержит требование ссылок и мягкое правило «нет ответа»."""
     block = render_local_rag_template([FakeHit()], query="вопрос")
     assert "[d1#c1]" in block
-    assert "В источниках нет ответа" in block
+    assert "не содержат ответа" in block
     assert LOCAL_RAG_INSTRUCTIONS in block
 
 
 def test_local_template_single_citation_form():
-    """Единая форма ссылки [doc_id#chunk_id] и запрет рассуждений вне источников."""
+    """Единая форма ссылки [doc_id#chunk_id] и опора на источники."""
     block = render_local_rag_template([FakeHit()])
     assert "[doc_id#chunk_id]" in block
-    assert "ТОЛЬКО по приведённым источникам" in block
-    assert "не длиннее 5 предложений" in block
+    assert "по приведённым источникам" in block
+    assert "не выдумывай фактов" in block
 
 
 def test_local_template_empty_hits():

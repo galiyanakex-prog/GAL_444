@@ -33,21 +33,21 @@
 - `RagService(cfg, llm=…, embedder=…)`; `answer(question, use_rag=True, llm=None)` использует
   переданный `llm`, иначе — `self.llm`. Смену модели внутри `rag/` **не** делаем.
 
-### ШАГ 5.2 — Секция `generation` в `rag/config.json`
+### ШАГ 5.2 — Генератор = модель агента (без секции `generation`)
 
-```json
-"generation": {"provider": "cloud", "model": null, "profile": null}
-```
+> **ПРАВКА (уточнение куратора 2026-10-12).** Изначально здесь планировалась секция
+> `generation` в `rag/config.json`. Она **убрана**: RAG — две роли (эмбеддинг + генератор),
+> и **генератор = текущая модель агента** (`models.json → current` + `/model`). Отдельного
+> выбора генератора и дублирующей секции нет — «выбрал модель в одном месте, она и отвечает».
 
-Переопределение: `--gen-provider`, `--gen-model`, `AI9_GEN_PROVIDER`, `AI9_GEN_MODEL`.
-`profile: null` = «профиль самой модели из реестра» (напр. `rag-strict` у боевой 3B);
-иначе профиль перезаписывается и локальная модель генерирует без лимита токенов
-(упирается в таймаут).
+Генератор строится из `ModelRegistry.current()` (та же модель, что отвечает в чате).
+Профиль параметров берётся у самой модели из реестра (напр. `rag-strict` у боевой 3B).
 
 ### ШАГ 5.3 — Флаг `--local-gen` и REPL `/gen local`
 
-Собирает клиента из `ModelRegistry` и подставляет в `agent.llm` **и** `rag_service.llm` —
-одна точка, без расхождений. `/gen status` — кто генерирует сейчас (модель + профиль).
+Переключает **модель агента** на локальную и синхронизирует `agent.llm` **и**
+`rag_service.llm` — одна точка, без расхождений. `/gen status` — кто генерирует сейчас
+(= текущая модель агента + профиль). `/gen local|cloud` — удобный алиас над `/model use`.
 
 ### ШАГ 5.4 — Полный локальный контур
 
@@ -86,7 +86,7 @@ agent.llm и rag_service.llm. Индекс не пересобирается; в
 
 ## Выход этапа
 
-- `rag/service.py` — явный `llm`-инжект; `rag/config.json` — секция `generation`;
+- `rag/service.py` — явный `llm`-инжект (генератор = модель агента, без секции `generation`);
 - `Kod.py` — флаг `--local-gen`, команды `/gen …`;
 - `dev/tests_debug/unit/test_rag_local_gen.py` — создан;
 - запись «Этап 5» в `dev/migr_log.md`.
@@ -106,7 +106,7 @@ agent.llm и rag_service.llm. Индекс не пересобирается; в
 
 ## Откат
 
-`git checkout -- rag/service.py rag/config.json Kod.py`; удалить `test_rag_local_gen.py`.
+`git checkout -- rag/service.py Kod.py`; удалить `test_rag_local_gen.py`.
 Запись помечается ❌.
 
 ## Что передаём дальше

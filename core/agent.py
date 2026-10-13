@@ -278,12 +278,20 @@ class Agent:
 
         Единая точка переключения модели (команда `/model use`). Не трогает
         TaskStage, память и набор `deliver` — «инструмент ≠ переход».
+
+        Генератор RAG = текущая модель агента (уточнение куратора 2026-10-12):
+        здесь же обновляем `rag_service.llm`, чтобы RAG отвечал той же моделью.
+        Граница §5 сохранена: rag_service — непрозрачный объект (duck-typing),
+        core/ не импортирует rag/.
         """
         self.llm = client
         if getattr(self, "executor", None) is not None:
             self.executor.llm = client
         if label is not None:
             self._model_label = label
+        rag_service = getattr(self, "rag_service", None)
+        if rag_service is not None:
+            rag_service.llm = client.complete
 
     def model_label(self) -> str:
         """Единый источник подписи модели для CLI/лога/HTTP."""

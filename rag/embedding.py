@@ -7,10 +7,11 @@
   * `HashingEmbedder` — дефолт, 0 зависимостей: char 3–5-граммы → blake2b → dim 256
     → L2-норма. Детерминирован между запусками и машинами.
   * `OllamaEmbedder` — живой: POST /api/embed, только localhost, батчи, retry.
+  * `OpenAICompatEmbedder` — живой: POST /v1/embeddings (LM Studio и др.), только localhost.
   * `FakeEmbedder` — детерминированный по хэшу текста (тесты).
   * `SentenceTransformerEmbedder` — заглушка: бросает RagDependencyError.
 
-Деградация: Ollama недоступен → предупреждение + HashingEmbedder (не падение).
+Деградация: живой сервис недоступен → предупреждение + HashingEmbedder (не падение).
 """
 from __future__ import annotations
 
@@ -140,6 +141,56 @@ class SentenceTransformerEmbedder(Embedder):
             "сознательно не устанавливаем")
 
 
+class OpenAICompatEmbedder(Embedder):
+    """Эмбеддер через OpenAI-совместимый сервис (LM Studio и др.), только localhost.
+
+    Роль «эмбеддинг» не захардкожена на Ollama (уточнение куратора 2026-10-12):
+    подойдёт любой сервис с embedding-моделью. LM Studio отдаёт
+    `POST /v1/embeddings` (совместимо с OpenAI). `dim` задаётся конфигом; при
+    смене модели/dim индекс нужно пересобрать (meta.json фиксирует model_id/dim).
+    """
+
+    def __init__(self, url: str, model: str, dim: int, batch_size: int = 8,
+                 timeout: int = 60, retries: int = 2, log=None):
+        if not url.lower().startswith(_ALLOWED_URL_PREFIXES):
+            raise ValueError(
+                f"OpenAICompatEmbedder: url обязан быть локальным {_ALLOWED_URL_PREFIXES}, "
+                f"получено: {url}")
+        self.url = url.rstrip("/")
+        self.model = model
+        self.dim = dim
+        self.batch_size = batch_size
+        self.timeout = timeout
+        self.retries = retries
+        self.model_id = f"openai-compat:{model}"
+        self.log = log or (lambda line: None)
+
+    def _post(self, payload: dict) -> dict:
+        data = json.dumps(payload).encode("utf-8")
+        request = urllib.request.Request(
+            f"{self.url}/v1/embeddings", data=data,
+            headers={"Content-Type": "application/json"})
+        last_error = None
+        for attempt in range(self.retries + 1):
+            try:
+                with urllib.request.urlopen(request, timeout=self.timeout) as resp:
+                    return json.load(resp)
+            except (urllib.error.URLError, OSError, json.JSONDecodeError) as error:
+                last_error = error
+                if attempt < self.retries:
+                    time.sleep(2 ** attempt)
+        raise RuntimeError(
+            f"OpenAICompatEmbedder: не удалось получить эмбеддинги: {last_error}")
+
+    def embed(self, texts: list) -> list:
+        vectors = []
+        for start in range(0, len(texts), self.batch_size):
+            batch = texts[start:start + self.batch_size]
+            data = self._post({"model": self.model, "input": batch})
+            vectors.extend(item["embedding"] for item in data["data"])
+        return vectors
+
+
 class EmbeddingCache:
     """Кэш эмбеддингов: sha1(text) → vector. Перестроение не переэмбедит неизменное."""
 
@@ -170,7 +221,11 @@ class EmbeddingCache:
 
 
 def make_embedder(cfg, log=None):
-    """Выбор эмбеддера по cfg.provider с деградацией на HashingEmbedder."""
+    """Выбор эмбеддера по cfg.provider с деградацией на HashingEmbedder.
+
+    Провайдер не захардкожен (уточнение куратора 2026-10-12): `ollama` и
+    `lmstudio` (OpenAI-совместимый `/v1/embeddings`) — равноправные варианты.
+    """
     log = log or (lambda line: None)
     provider = cfg.provider
     if provider == "hashing":
@@ -189,5 +244,16 @@ def make_embedder(cfg, log=None):
             return embedder
         except RuntimeError as error:
             log(f"[RAG] Ollama недоступен ({error}) — деградация на HashingEmbedder")
+            return HashingEmbedder(dim=cfg.hashing_dim)
+    if provider == "lmstudio":
+        embedder = OpenAICompatEmbedder(
+            url=cfg.url, model=cfg.model, dim=cfg.dim, batch_size=cfg.batch_size,
+            timeout=cfg.timeout_seconds, retries=cfg.retries, log=log)
+        try:
+            embedder.embed(["проверка доступности"])
+            return embedder
+        except RuntimeError as error:
+            log(f"[RAG] LM Studio (embeddings) недоступен ({error}) — "
+                "деградация на HashingEmbedder")
             return HashingEmbedder(dim=cfg.hashing_dim)
     raise ValueError(f"неизвестный провайдер эмбеддингов: {provider}")

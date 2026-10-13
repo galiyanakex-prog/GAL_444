@@ -207,7 +207,8 @@ def _citations_valid(text: str, hits: list) -> tuple:
 
 
 def compare_generators(cfg, queries, generators, k: int = 5, repeat: int = 1,
-                       threshold: float = None, block_renderers: dict = None) -> dict:
+                       threshold: float = None, block_renderers: dict = None,
+                       resource_hooks: dict = None) -> dict:
     """Прогнать контрольные вопросы разными генераторами (часть 3, этап 6).
 
     `generators` — dict {имя: callable(messages)->str} (DI). Различается только
@@ -215,16 +216,24 @@ def compare_generators(cfg, queries, generators, k: int = 5, repeat: int = 1,
     оси «стабильность»). `block_renderers` (часть 4, этап 7) — dict
     {имя: callable(hits, query)->str} для сборки блока [rag] иным шаблоном
     (напр. строгий локальный); отсутствие имени → общий шаблон.
-    Возвращает {"rows", "summary", "divergences", "verdict"}.
+    `resource_hooks` (часть 4, этап 8) — dict {имя: {"start": callable,
+    "stop": callable}} для снятия ресурсов вокруг прогона генератора; `stop`
+    возвращает dict-сводку, которая кладётся в `result["resources"][имя]`.
+    Возвращает {"rows", "summary", "divergences", "verdict", "resources"}.
     """
     from rag.service import RagService
     query_list = queries if isinstance(queries, list) else load_queries(queries)
     repeat = max(1, int(repeat))
     block_renderers = block_renderers or {}
+    resource_hooks = resource_hooks or {}
     rows = []
+    resources = {}
     for name, llm in generators.items():
         svc = RagService(cfg, llm=llm)
         renderer = block_renderers.get(name)
+        hook = resource_hooks.get(name)
+        if hook and hook.get("start"):
+            hook["start"]()
         for q in query_list:
             for run in range(repeat):
                 ans = svc.answer(q["query"], use_rag=True, k=k, threshold=threshold,
@@ -243,11 +252,13 @@ def compare_generators(cfg, queries, generators, k: int = 5, repeat: int = 1,
                     "verdict": ans.verdict, "answer_len": len(text),
                     "latency_ms": ans.latency_ms, "error": error,
                 })
+        if hook and hook.get("stop"):
+            resources[name] = hook["stop"]()
     summary = _generator_summary(rows)
     divergences = _generator_divergences(rows)
     verdict = _generator_verdict(summary)
     return {"rows": rows, "summary": summary, "divergences": divergences,
-            "verdict": verdict, "k": k, "repeat": repeat}
+            "verdict": verdict, "k": k, "repeat": repeat, "resources": resources}
 
 
 def _median(values: list) -> float:
@@ -401,6 +412,24 @@ def render_generator_report(result, title: str = None) -> str:
     else:
         lines.append("Расхождений между генераторами не обнаружено.")
     lines.append("")
+    resources = result.get("resources") or {}
+    if resources:
+        lines.append("## Ресурсы по генераторам")
+        lines.append("")
+        lines.append("| Генератор | RSS пик, МБ | RSS среднее, МБ | CPU среднее, % | "
+                     "Размер модели | RAM до (used/avail) | RAM после (used/avail) |")
+        lines.append("|---|---|---|---|---|---|---|")
+        for name, r in resources.items():
+            before = r.get("free_before", {})
+            after = r.get("free_after", {})
+            lines.append(
+                f"| {name} | {r.get('rss_peak_mb', 0)} | {r.get('rss_avg_mb', 0)} | "
+                f"{r.get('cpu_avg', 0)} | {r.get('model_size', '—') or '—'} | "
+                f"{before.get('used_mb', 0)}/{before.get('available_mb', 0)} | "
+                f"{after.get('used_mb', 0)}/{after.get('available_mb', 0)} |")
+        lines.append("")
+        lines.append("**GPU:** дискретного GPU нет, inference по CPU, VRAM неприменим.")
+        lines.append("")
     return "\n".join(lines)
 
 
