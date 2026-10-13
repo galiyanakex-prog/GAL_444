@@ -539,3 +539,321 @@
 [08:26:04] [Память] working ← ['lifecycle_summary'] → /home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/users/embedcheck/tasks/Основная_задача/working_memory.json
 [08:26:04] [Память] remember(working) → working_memory.json ['lifecycle_summary']
 [08:29:29] [RAG] grounding: verdict=partial coverage=0.25 ссылок=0 чисел вне=0
+[08:54:49] [Хранилище] profile «default» = JSON в SQLite (таблица profiles, user_id=facade_u1)
+[08:54:49] [Память] profile «default» ← ['id', 'name', 'style', 'constraints', 'context'] → /home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/users/facade_u1/profiles/default.json (JSON в SQLite)
+[08:54:49] [Память] remember(profile) → profile.json (['id', 'name', 'style', 'constraints', 'context'])
+[08:54:49] [Память] working ← ['description'] → /home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/users/facade_u1/tasks/Основная_задача/working_memory.json
+[08:54:49] [Память] remember(working) → working_memory.json ['description']
+[08:54:49] [Память] long_term ← ['tasks'] → /home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/users/facade_u1/long_term_memory.json
+[08:54:49] [Память] remember(long_term) → long_term_memory.json ['tasks']
+[08:54:49] [Агент] Пользователь facade_u1 инициализирован (интервью пройдено)
+[08:54:49] [Память] short_term ← M1 (parent=None) → /home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/users/facade_u1/tasks/Основная_задача/sessions/20261013_085449/session.json
+[08:54:49] [Память] short_term ← M2 (parent=M1) → /home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/users/facade_u1/tasks/Основная_задача/sessions/20261013_085449/session.json
+[08:54:49] [Агент] M1: ответ получен (доставка: ['invariants', 'long_term', 'profile', 'short_term', 'working']; model=mock/Mock)
+[08:54:49] [Фасад] user=facade_u1 model=mock/Mock tokens=103 duration=0.001s
+[08:54:49] [Фасад] ошибка /ask: TypeError: can't multiply sequence by non-int of type 'float'
+[08:54:49] [Хранилище] profile «default» = JSON в SQLite (таблица profiles, user_id=facade_u2)
+[08:54:49] [Память] profile «default» ← ['id', 'name', 'style', 'constraints', 'context'] → /home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/users/facade_u2/profiles/default.json (JSON в SQLite)
+[08:54:49] [Память] remember(profile) → profile.json (['id', 'name', 'style', 'constraints', 'context'])
+[08:54:49] [Память] working ← ['description'] → /home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/users/facade_u2/tasks/Основная_задача/working_memory.json
+[08:54:49] [Память] remember(working) → working_memory.json ['description']
+[08:54:49] [Память] long_term ← ['tasks'] → /home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/users/facade_u2/long_term_memory.json
+[08:54:49] [Память] remember(long_term) → long_term_memory.json ['tasks']
+[08:54:49] [Агент] Пользователь facade_u2 инициализирован (интервью пройдено)
+[08:54:49] [Хранилище] profile «default» = JSON в SQLite (таблица profiles, user_id=facade_new)
+[08:54:49] [Память] profile «default» ← ['id', 'name', 'style', 'constraints', 'context'] → /home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/users/facade_new/profiles/default.json (JSON в SQLite)
+[08:54:49] [Память] remember(profile) → profile.json (['id', 'name', 'style', 'constraints', 'context'])
+[08:54:49] [Память] working ← ['description'] → /home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/users/facade_new/tasks/Основная_задача/working_memory.json
+[08:54:49] [Память] remember(working) → working_memory.json ['description']
+[08:54:49] [Память] long_term ← ['tasks'] → /home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/users/facade_new/long_term_memory.json
+[08:54:49] [Память] remember(long_term) → long_term_memory.json ['tasks']
+[08:54:49] [Агент] Пользователь facade_new инициализирован (интервью пройдено)
+[08:54:49] [Память] short_term ← M1 (parent=None) → /home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/users/facade_new/tasks/Основная_задача/sessions/20261013_085449/session.json
+[08:54:49] [Память] short_term ← M2 (parent=M1) → /home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/users/facade_new/tasks/Основная_задача/sessions/20261013_085449/session.json
+[08:54:49] [Агент] M1: ответ получен (доставка: ['invariants', 'long_term', 'profile', 'short_term', 'working']; model=mock/Mock)
+[08:54:49] [Фасад] user=facade_new model=mock/Mock tokens=103 duration=0.001s
+[08:54:49] [Фасад] ошибка /ask: TypeError: can't multiply sequence by non-int of type 'float'
+[08:54:49] [Хранилище] profile «default» = JSON в SQLite (таблица profiles, user_id=facade_iv)
+[08:54:49] [Память] profile «default» ← ['id', 'name', 'style', 'constraints', 'context'] → /home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/users/facade_iv/profiles/default.json (JSON в SQLite)
+[08:54:49] [Память] remember(profile) → profile.json (['id', 'name', 'style', 'constraints', 'context'])
+[08:54:49] [Память] working ← ['description'] → /home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/users/facade_iv/tasks/Основная_задача/working_memory.json
+[08:54:49] [Память] remember(working) → working_memory.json ['description']
+[08:54:49] [Память] long_term ← ['tasks'] → /home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/users/facade_iv/long_term_memory.json
+[08:54:49] [Память] remember(long_term) → long_term_memory.json ['tasks']
+[08:54:49] [Агент] Пользователь facade_iv инициализирован (интервью пройдено)
+[08:54:49] [Хранилище] profile «default» = JSON в SQLite (таблица profiles, user_id=facade_iv)
+[08:54:49] [Память] profile «default» ← ['id', 'name', 'style', 'constraints', 'context'] → /home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/users/facade_iv/profiles/default.json (JSON в SQLite)
+[08:54:49] [Память] remember(profile) → profile.json (['id', 'name', 'style', 'constraints', 'context'])
+[08:54:49] [Память] working ← ['description'] → /home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/users/facade_iv/tasks/Основная_задача/working_memory.json
+[08:54:49] [Память] remember(working) → working_memory.json ['description']
+[08:54:49] [Память] long_term ← ['tasks'] → /home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/users/facade_iv/long_term_memory.json
+[08:54:49] [Память] remember(long_term) → long_term_memory.json ['tasks']
+[08:54:49] [Агент] Пользователь facade_iv инициализирован (интервью пройдено)
+[08:54:49] [Хранилище] profile «default» = JSON в SQLite (таблица profiles, user_id=facade_m)
+[08:54:49] [Память] profile «default» ← ['id', 'name', 'style', 'constraints', 'context'] → /home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/users/facade_m/profiles/default.json (JSON в SQLite)
+[08:54:49] [Память] remember(profile) → profile.json (['id', 'name', 'style', 'constraints', 'context'])
+[08:54:49] [Память] working ← ['description'] → /home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/users/facade_m/tasks/Основная_задача/working_memory.json
+[08:54:49] [Память] remember(working) → working_memory.json ['description']
+[08:54:49] [Память] long_term ← ['tasks'] → /home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/users/facade_m/long_term_memory.json
+[08:54:49] [Память] remember(long_term) → long_term_memory.json ['tasks']
+[08:54:49] [Агент] Пользователь facade_m инициализирован (интервью пройдено)
+[08:54:49] [Память] short_term ← M1 (parent=None) → /home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/users/facade_m/tasks/Основная_задача/sessions/20261013_085449/session.json
+[08:54:49] [Память] short_term ← M2 (parent=M1) → /home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/users/facade_m/tasks/Основная_задача/sessions/20261013_085449/session.json
+[08:54:49] [Агент] M1: ответ получен (доставка: ['invariants', 'long_term', 'profile', 'short_term', 'working']; model=mock/Mock)
+[08:54:49] [Фасад] user=facade_m model=mock/Mock tokens=103 duration=0.001s
+[08:54:49] [Фасад] ошибка /ask: TypeError: can't multiply sequence by non-int of type 'float'
+[08:54:49] [Хранилище] profile «default» = JSON в SQLite (таблица profiles, user_id=facade_m2)
+[08:54:49] [Память] profile «default» ← ['id', 'name', 'style', 'constraints', 'context'] → /home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/users/facade_m2/profiles/default.json (JSON в SQLite)
+[08:54:49] [Память] remember(profile) → profile.json (['id', 'name', 'style', 'constraints', 'context'])
+[08:54:49] [Память] working ← ['description'] → /home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/users/facade_m2/tasks/Основная_задача/working_memory.json
+[08:54:49] [Память] remember(working) → working_memory.json ['description']
+[08:54:49] [Память] long_term ← ['tasks'] → /home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/users/facade_m2/long_term_memory.json
+[08:54:49] [Память] remember(long_term) → long_term_memory.json ['tasks']
+[08:54:49] [Агент] Пользователь facade_m2 инициализирован (интервью пройдено)
+[08:54:49] [Память] short_term ← M1 (parent=None) → /home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/users/facade_m2/tasks/Основная_задача/sessions/20261013_085449/session.json
+[08:54:49] [Память] short_term ← M2 (parent=M1) → /home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/users/facade_m2/tasks/Основная_задача/sessions/20261013_085449/session.json
+[08:54:49] [Агент] M1: ответ получен (доставка: ['invariants', 'long_term', 'profile', 'short_term', 'working']; model=mock/Mock)
+[08:54:49] [Фасад] user=facade_m2 model=mock/Mock tokens=103 duration=0.001s
+[08:54:49] [Фасад] ошибка /ask: TypeError: can't multiply sequence by non-int of type 'float'
+[08:54:50] [Хранилище] profile «default» = JSON в SQLite (таблица profiles, user_id=facade_q0)
+[08:54:50] [Память] profile «default» ← ['id', 'name', 'style', 'constraints', 'context'] → /home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/users/facade_q0/profiles/default.json (JSON в SQLite)
+[08:54:50] [Память] remember(profile) → profile.json (['id', 'name', 'style', 'constraints', 'context'])
+[08:54:50] [Память] working ← ['description'] → /home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/users/facade_q0/tasks/Основная_задача/working_memory.json
+[08:54:50] [Память] remember(working) → working_memory.json ['description']
+[08:54:50] [Память] long_term ← ['tasks'] → /home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/users/facade_q0/long_term_memory.json
+[08:54:50] [Память] remember(long_term) → long_term_memory.json ['tasks']
+[08:54:50] [Агент] Пользователь facade_q0 инициализирован (интервью пройдено)
+[08:54:50] [Память] short_term ← M1 (parent=None) → /home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/users/facade_q0/tasks/Основная_задача/sessions/20261013_085449/session.json
+[08:54:50] [Память] short_term ← M2 (parent=M1) → /home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/users/facade_q0/tasks/Основная_задача/sessions/20261013_085449/session.json
+[08:54:50] [Агент] M1: ответ получен (доставка: ['invariants', 'long_term', 'profile', 'short_term', 'working']; model=mock/Mock)
+[08:54:50] [Фасад] user=facade_q0 model=mock/Mock tokens=103 duration=0.003s
+[08:54:50] [Фасад] ошибка /ask: TypeError: can't multiply sequence by non-int of type 'float'
+[08:54:50] [Хранилище] profile «default» = JSON в SQLite (таблица profiles, user_id=facade_q1)
+[08:54:50] [Память] profile «default» ← ['id', 'name', 'style', 'constraints', 'context'] → /home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/users/facade_q1/profiles/default.json (JSON в SQLite)
+[08:54:50] [Память] remember(profile) → profile.json (['id', 'name', 'style', 'constraints', 'context'])
+[08:54:50] [Память] working ← ['description'] → /home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/users/facade_q1/tasks/Основная_задача/working_memory.json
+[08:54:50] [Память] remember(working) → working_memory.json ['description']
+[08:54:50] [Память] long_term ← ['tasks'] → /home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/users/facade_q1/long_term_memory.json
+[08:54:50] [Память] remember(long_term) → long_term_memory.json ['tasks']
+[08:54:50] [Агент] Пользователь facade_q1 инициализирован (интервью пройдено)
+[08:54:50] [Память] short_term ← M1 (parent=None) → /home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/users/facade_q1/tasks/Основная_задача/sessions/20261013_085450/session.json
+[08:54:50] [Память] short_term ← M2 (parent=M1) → /home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/users/facade_q1/tasks/Основная_задача/sessions/20261013_085450/session.json
+[08:54:50] [Агент] M1: ответ получен (доставка: ['invariants', 'long_term', 'profile', 'short_term', 'working']; model=mock/Mock)
+[08:54:50] [Фасад] user=facade_q1 model=mock/Mock tokens=103 duration=0.001s
+[08:54:50] [Фасад] ошибка /ask: TypeError: can't multiply sequence by non-int of type 'float'
+[08:54:50] [Хранилище] profile «default» = JSON в SQLite (таблица profiles, user_id=facade_err)
+[08:54:50] [Память] profile «default» ← ['id', 'name', 'style', 'constraints', 'context'] → /home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/users/facade_err/profiles/default.json (JSON в SQLite)
+[08:54:50] [Память] remember(profile) → profile.json (['id', 'name', 'style', 'constraints', 'context'])
+[08:54:50] [Память] working ← ['description'] → /home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/users/facade_err/tasks/Основная_задача/working_memory.json
+[08:54:50] [Память] remember(working) → working_memory.json ['description']
+[08:54:50] [Память] long_term ← ['tasks'] → /home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/users/facade_err/long_term_memory.json
+[08:54:50] [Память] remember(long_term) → long_term_memory.json ['tasks']
+[08:54:50] [Агент] Пользователь facade_err инициализирован (интервью пройдено)
+[08:54:50] [Память] short_term ← M1 (parent=None) → /home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/users/facade_err/tasks/Основная_задача/sessions/20261013_085450/session.json
+[08:54:50] [Память] short_term ← M2 (parent=M1) → /home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/users/facade_err/tasks/Основная_задача/sessions/20261013_085450/session.json
+[08:54:50] [Агент] M1: ответ получен (доставка: ['invariants', 'long_term', 'profile', 'short_term', 'working']; model=mock/Mock)
+[08:54:50] [Фасад] user=facade_err model=mock/Mock tokens=103 duration=0.001s
+[08:54:50] [Фасад] ошибка /ask: TypeError: can't multiply sequence by non-int of type 'float'
+[08:54:50] [Фасад] ошибка /ask: RuntimeError: сломалось
+[08:54:57] [Память] short_term ← M1 (parent=None) → /home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/users/facade_u1/tasks/Основная_задача/sessions/20261013_085457/session.json
+[08:54:57] [Память] short_term ← M2 (parent=M1) → /home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/users/facade_u1/tasks/Основная_задача/sessions/20261013_085457/session.json
+[08:54:57] [Агент] M1: ответ получен (доставка: ['invariants', 'long_term', 'profile', 'short_term', 'working']; model=mock/Mock)
+[08:54:57] [Фасад] user=facade_u1 model=mock/Mock tokens=103 duration=0.001s
+[08:54:57] [Фасад] ошибка /ask: TypeError: can't multiply sequence by non-int of type 'float'
+[08:55:08] [Хранилище] profile «default» = JSON в SQLite (таблица profiles, user_id=dbg1)
+[08:55:08] [Память] profile «default» ← ['id', 'name', 'style', 'constraints', 'context'] → /home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/users/dbg1/profiles/default.json (JSON в SQLite)
+[08:55:08] [Память] remember(profile) → profile.json (['id', 'name', 'style', 'constraints', 'context'])
+[08:55:08] [Память] working ← ['description'] → /home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/users/dbg1/tasks/Основная_задача/working_memory.json
+[08:55:08] [Память] remember(working) → working_memory.json ['description']
+[08:55:08] [Память] long_term ← ['tasks'] → /home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/users/dbg1/long_term_memory.json
+[08:55:08] [Память] remember(long_term) → long_term_memory.json ['tasks']
+[08:55:08] [Агент] Пользователь dbg1 инициализирован (интервью пройдено)
+[08:55:08] [Память] short_term ← M1 (parent=None) → /home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/users/dbg1/tasks/Основная_задача/sessions/20261013_085508/session.json
+[08:55:08] [Память] short_term ← M2 (parent=M1) → /home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/users/dbg1/tasks/Основная_задача/sessions/20261013_085508/session.json
+[08:55:08] [Агент] M1: ответ получен (доставка: ['invariants', 'long_term', 'profile', 'short_term', 'working']; model=mock/Mock)
+[08:55:08] [Фасад] user=dbg1 model=mock/Mock tokens=102 duration=0.001s
+[08:55:08] [Фасад] ошибка /ask: TypeError: can't multiply sequence by non-int of type 'float'
+[08:55:51] [Память] short_term ← M1 (parent=None) → /home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/users/facade_u1/tasks/Основная_задача/sessions/20261013_085551/session.json
+[08:55:51] [Память] short_term ← M2 (parent=M1) → /home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/users/facade_u1/tasks/Основная_задача/sessions/20261013_085551/session.json
+[08:55:51] [Агент] M1: ответ получен (доставка: ['invariants', 'long_term', 'profile', 'short_term', 'working']; model=mock/Mock)
+[08:55:51] [Фасад] user=facade_u1 model=mock/Mock tokens=103 duration=0.001s
+[08:55:51] [Память] short_term ← M1 (parent=None) → /home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/users/facade_new/tasks/Основная_задача/sessions/20261013_085551/session.json
+[08:55:51] [Память] short_term ← M2 (parent=M1) → /home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/users/facade_new/tasks/Основная_задача/sessions/20261013_085551/session.json
+[08:55:51] [Агент] M1: ответ получен (доставка: ['invariants', 'long_term', 'profile', 'short_term', 'working']; model=mock/Mock)
+[08:55:51] [Фасад] user=facade_new model=mock/Mock tokens=103 duration=0.001s
+[08:55:51] [Хранилище] profile «default» = JSON в SQLite (таблица profiles, user_id=facade_iv)
+[08:55:51] [Память] profile «default» ← ['id', 'name', 'style', 'constraints', 'context'] → /home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/users/facade_iv/profiles/default.json (JSON в SQLite)
+[08:55:51] [Память] remember(profile) → profile.json (['id', 'name', 'style', 'constraints', 'context'])
+[08:55:51] [Память] working ← ['description'] → /home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/users/facade_iv/tasks/Основная_задача/working_memory.json
+[08:55:51] [Память] remember(working) → working_memory.json ['description']
+[08:55:51] [Память] long_term ← ['tasks'] → /home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/users/facade_iv/long_term_memory.json
+[08:55:51] [Память] remember(long_term) → long_term_memory.json ['tasks']
+[08:55:51] [Агент] Пользователь facade_iv инициализирован (интервью пройдено)
+[08:55:51] [Память] short_term ← M1 (parent=None) → /home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/users/facade_m/tasks/Основная_задача/sessions/20261013_085551/session.json
+[08:55:51] [Память] short_term ← M2 (parent=M1) → /home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/users/facade_m/tasks/Основная_задача/sessions/20261013_085551/session.json
+[08:55:51] [Агент] M1: ответ получен (доставка: ['invariants', 'long_term', 'profile', 'short_term', 'working']; model=mock/Mock)
+[08:55:51] [Фасад] user=facade_m model=mock/Mock tokens=103 duration=0.001s
+[08:55:51] [Память] short_term ← M1 (parent=None) → /home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/users/facade_m2/tasks/Основная_задача/sessions/20261013_085551/session.json
+[08:55:51] [Память] short_term ← M2 (parent=M1) → /home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/users/facade_m2/tasks/Основная_задача/sessions/20261013_085551/session.json
+[08:55:51] [Агент] M1: ответ получен (доставка: ['invariants', 'long_term', 'profile', 'short_term', 'working']; model=mock/Mock)
+[08:55:51] [Фасад] user=facade_m2 model=mock/Mock tokens=103 duration=0.001s
+[08:55:51] [Память] short_term ← M1 (parent=None) → /home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/users/facade_q0/tasks/Основная_задача/sessions/20261013_085551/session.json
+[08:55:51] [Память] short_term ← M2 (parent=M1) → /home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/users/facade_q0/tasks/Основная_задача/sessions/20261013_085551/session.json
+[08:55:51] [Агент] M1: ответ получен (доставка: ['invariants', 'long_term', 'profile', 'short_term', 'working']; model=mock/Mock)
+[08:55:51] [Фасад] user=facade_q0 model=mock/Mock tokens=103 duration=0.001s
+[08:55:51] [Память] short_term ← M1 (parent=None) → /home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/users/facade_q1/tasks/Основная_задача/sessions/20261013_085551/session.json
+[08:55:51] [Память] short_term ← M2 (parent=M1) → /home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/users/facade_q1/tasks/Основная_задача/sessions/20261013_085551/session.json
+[08:55:51] [Агент] M1: ответ получен (доставка: ['invariants', 'long_term', 'profile', 'short_term', 'working']; model=mock/Mock)
+[08:55:51] [Фасад] user=facade_q1 model=mock/Mock tokens=103 duration=0.001s
+[08:55:51] [Память] short_term ← M1 (parent=None) → /home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/users/facade_err/tasks/Основная_задача/sessions/20261013_085551/session.json
+[08:55:51] [Память] short_term ← M2 (parent=M1) → /home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/users/facade_err/tasks/Основная_задача/sessions/20261013_085551/session.json
+[08:55:51] [Агент] M1: ответ получен (доставка: ['invariants', 'long_term', 'profile', 'short_term', 'working']; model=mock/Mock)
+[08:55:51] [Фасад] user=facade_err model=mock/Mock tokens=103 duration=0.001s
+[08:55:51] [Фасад] ошибка /ask: RuntimeError: сломалось
+[08:56:17] [Хранилище] profile «default» = JSON в SQLite (таблица profiles, user_id=facade_live)
+[08:56:17] [Память] profile «default» ← ['id', 'name', 'style', 'constraints', 'context'] → /home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/users/facade_live/profiles/default.json (JSON в SQLite)
+[08:56:17] [Память] remember(profile) → profile.json (['id', 'name', 'style', 'constraints', 'context'])
+[08:56:17] [Память] working ← ['description'] → /home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/users/facade_live/tasks/Основная_задача/working_memory.json
+[08:56:17] [Память] remember(working) → working_memory.json ['description']
+[08:56:17] [Память] long_term ← ['tasks'] → /home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/users/facade_live/long_term_memory.json
+[08:56:17] [Память] remember(long_term) → long_term_memory.json ['tasks']
+[08:56:17] [Агент] Пользователь facade_live инициализирован (интервью пройдено)
+[08:56:17] [Память] short_term ← M1 (parent=None) → /home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/users/facade_live/tasks/Основная_задача/sessions/20261013_085617/session.json
+[08:56:32] [Память] short_term ← M2 (parent=M1) → /home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/users/facade_live/tasks/Основная_задача/sessions/20261013_085617/session.json
+[08:56:32] [Агент] M1: ответ получен (доставка: ['invariants', 'long_term', 'profile', 'short_term', 'working']; model=cloud/stepfun/step-3.5-flash)
+[08:56:32] [Фасад] user=facade_live model=cloud/stepfun/step-3.5-flash tokens=15 duration=15.425s
+[08:56:32] [Память] short_term ← M3 (parent=M2) → /home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/users/facade_live/tasks/Основная_задача/sessions/20261013_085617/session.json
+[08:56:36] [Память] short_term ← M4 (parent=M3) → /home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/users/facade_live/tasks/Основная_задача/sessions/20261013_085617/session.json
+[08:56:36] [Агент] M2: ответ получен (доставка: ['invariants', 'long_term', 'profile', 'short_term', 'working']; model=cloud/stepfun/step-3.5-flash)
+[08:56:36] [Фасад] user=facade_live model=cloud/stepfun/step-3.5-flash tokens=15 duration=4.117s
+[08:57:19] [Память] short_term ← M1 (parent=None) → /home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/users/facade_live/tasks/Основная_задача/sessions/20261013_085719/session.json
+[08:57:19] [Память] short_term ← M2 (parent=M1) → /home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/users/facade_live/tasks/Основная_задача/sessions/20261013_085719/session.json
+[08:57:19] [Агент] M1: ответ получен (доставка: ['invariants', 'long_term', 'profile', 'short_term', 'working']; model=mock/Mock)
+[08:57:19] [Фасад] user=facade_live model=mock/Mock tokens=103 duration=0.001s
+[08:57:19] [Память] short_term ← M3 (parent=M2) → /home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/users/facade_live/tasks/Основная_задача/sessions/20261013_085719/session.json
+[08:57:19] [Память] short_term ← M4 (parent=M3) → /home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/users/facade_live/tasks/Основная_задача/sessions/20261013_085719/session.json
+[08:57:19] [Агент] M2: ответ получен (доставка: ['invariants', 'long_term', 'profile', 'short_term', 'working']; model=mock/Mock)
+[08:57:19] [Фасад] user=facade_live model=mock/Mock tokens=131 duration=0.002s
+[08:58:09] [Хранилище] profile «default» = JSON в SQLite (таблица profiles, user_id=__t9)
+[08:58:09] [Память] profile «default» ← ['id', 'name', 'style', 'constraints', 'context'] → /home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/users/t9/profiles/default.json (JSON в SQLite)
+[08:58:09] [Память] remember(profile) → profile.json (['id', 'name', 'style', 'constraints', 'context'])
+[08:58:09] [Память] working ← ['description'] → /home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/users/t9/tasks/Основная_задача/working_memory.json
+[08:58:09] [Память] remember(working) → working_memory.json ['description']
+[08:58:09] [Память] long_term ← ['tasks'] → /home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/users/t9/long_term_memory.json
+[08:58:09] [Память] remember(long_term) → long_term_memory.json ['tasks']
+[08:58:09] [Агент] Пользователь __t9 инициализирован (интервью пройдено)
+[08:58:09] [Память] short_term ← M1 (parent=None) → /home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/users/t9/tasks/Основная_задача/sessions/20261013_085809/session.json
+[08:58:09] [Память] short_term ← M2 (parent=M1) → /home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/users/t9/tasks/Основная_задача/sessions/20261013_085809/session.json
+[08:58:09] [Агент] M1: ответ получен (доставка: ['invariants', 'long_term', 'profile', 'short_term', 'working']; model=mock/Mock)
+[08:58:20] [Память] short_term ← M1 (parent=None) → /home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/users/facade_u1/tasks/Основная_задача/sessions/20261013_085820/session.json
+[08:58:20] [Память] short_term ← M2 (parent=M1) → /home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/users/facade_u1/tasks/Основная_задача/sessions/20261013_085820/session.json
+[08:58:20] [Агент] M1: ответ получен (доставка: ['invariants', 'long_term', 'profile', 'short_term', 'working']; model=mock/Mock)
+[08:58:20] [Фасад] user=facade_u1 model=mock/Mock tokens=91 duration=0.001s
+[08:58:20] [Память] short_term ← M1 (parent=None) → /home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/users/facade_new/tasks/Основная_задача/sessions/20261013_085820/session.json
+[08:58:20] [Память] short_term ← M2 (parent=M1) → /home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/users/facade_new/tasks/Основная_задача/sessions/20261013_085820/session.json
+[08:58:20] [Агент] M1: ответ получен (доставка: ['invariants', 'long_term', 'profile', 'short_term', 'working']; model=mock/Mock)
+[08:58:20] [Фасад] user=facade_new model=mock/Mock tokens=92 duration=0.001s
+[08:58:20] [Хранилище] profile «default» = JSON в SQLite (таблица profiles, user_id=facade_iv)
+[08:58:20] [Память] profile «default» ← ['id', 'name', 'style', 'constraints', 'context'] → /home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/users/facade_iv/profiles/default.json (JSON в SQLite)
+[08:58:20] [Память] remember(profile) → profile.json (['id', 'name', 'style', 'constraints', 'context'])
+[08:58:20] [Память] working ← ['description'] → /home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/users/facade_iv/tasks/Основная_задача/working_memory.json
+[08:58:20] [Память] remember(working) → working_memory.json ['description']
+[08:58:20] [Память] long_term ← ['tasks'] → /home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/users/facade_iv/long_term_memory.json
+[08:58:20] [Память] remember(long_term) → long_term_memory.json ['tasks']
+[08:58:20] [Агент] Пользователь facade_iv инициализирован (интервью пройдено)
+[08:58:20] [Память] short_term ← M1 (parent=None) → /home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/users/facade_m/tasks/Основная_задача/sessions/20261013_085820/session.json
+[08:58:20] [Память] short_term ← M2 (parent=M1) → /home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/users/facade_m/tasks/Основная_задача/sessions/20261013_085820/session.json
+[08:58:20] [Агент] M1: ответ получен (доставка: ['invariants', 'long_term', 'profile', 'short_term', 'working']; model=mock/Mock)
+[08:58:20] [Фасад] user=facade_m model=mock/Mock tokens=91 duration=0.001s
+[08:58:20] [Память] short_term ← M1 (parent=None) → /home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/users/facade_m2/tasks/Основная_задача/sessions/20261013_085820/session.json
+[08:58:20] [Память] short_term ← M2 (parent=M1) → /home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/users/facade_m2/tasks/Основная_задача/sessions/20261013_085820/session.json
+[08:58:20] [Агент] M1: ответ получен (доставка: ['invariants', 'long_term', 'profile', 'short_term', 'working']; model=mock/Mock)
+[08:58:20] [Фасад] user=facade_m2 model=mock/Mock tokens=91 duration=0.001s
+[08:58:20] [Память] short_term ← M1 (parent=None) → /home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/users/facade_q0/tasks/Основная_задача/sessions/20261013_085820/session.json
+[08:58:20] [Память] short_term ← M2 (parent=M1) → /home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/users/facade_q0/tasks/Основная_задача/sessions/20261013_085820/session.json
+[08:58:20] [Агент] M1: ответ получен (доставка: ['invariants', 'long_term', 'profile', 'short_term', 'working']; model=mock/Mock)
+[08:58:20] [Фасад] user=facade_q0 model=mock/Mock tokens=91 duration=0.001s
+[08:58:20] [Память] short_term ← M1 (parent=None) → /home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/users/facade_q1/tasks/Основная_задача/sessions/20261013_085820/session.json
+[08:58:20] [Память] short_term ← M2 (parent=M1) → /home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/users/facade_q1/tasks/Основная_задача/sessions/20261013_085820/session.json
+[08:58:20] [Агент] M1: ответ получен (доставка: ['invariants', 'long_term', 'profile', 'short_term', 'working']; model=mock/Mock)
+[08:58:20] [Фасад] user=facade_q1 model=mock/Mock tokens=91 duration=0.001s
+[08:58:20] [Память] short_term ← M1 (parent=None) → /home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/users/facade_err/tasks/Основная_задача/sessions/20261013_085820/session.json
+[08:58:20] [Память] short_term ← M2 (parent=M1) → /home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/users/facade_err/tasks/Основная_задача/sessions/20261013_085820/session.json
+[08:58:20] [Агент] M1: ответ получен (доставка: ['invariants', 'long_term', 'profile', 'short_term', 'working']; model=mock/Mock)
+[08:58:20] [Фасад] user=facade_err model=mock/Mock tokens=92 duration=0.001s
+[08:58:20] [Фасад] ошибка /ask: RuntimeError: сломалось
+[08:58:45] [Память] short_term ← M1 (parent=None) → /home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/users/facade_u1/tasks/Основная_задача/sessions/20261013_085845/session.json
+[08:58:45] [Память] short_term ← M2 (parent=M1) → /home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/users/facade_u1/tasks/Основная_задача/sessions/20261013_085845/session.json
+[08:58:45] [Агент] M1: ответ получен (доставка: ['invariants', 'long_term', 'profile', 'short_term', 'working']; model=mock/Mock)
+[08:58:45] [Фасад] user=facade_u1 model=mock/Mock tokens=91 duration=0.001s
+[08:58:45] [Память] short_term ← M1 (parent=None) → /home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/users/facade_new/tasks/Основная_задача/sessions/20261013_085845/session.json
+[08:58:45] [Память] short_term ← M2 (parent=M1) → /home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/users/facade_new/tasks/Основная_задача/sessions/20261013_085845/session.json
+[08:58:45] [Агент] M1: ответ получен (доставка: ['invariants', 'long_term', 'profile', 'short_term', 'working']; model=mock/Mock)
+[08:58:45] [Фасад] user=facade_new model=mock/Mock tokens=92 duration=0.001s
+[08:58:45] [Хранилище] profile «default» = JSON в SQLite (таблица profiles, user_id=facade_iv)
+[08:58:45] [Память] profile «default» ← ['id', 'name', 'style', 'constraints', 'context'] → /home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/users/facade_iv/profiles/default.json (JSON в SQLite)
+[08:58:45] [Память] remember(profile) → profile.json (['id', 'name', 'style', 'constraints', 'context'])
+[08:58:45] [Память] working ← ['description'] → /home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/users/facade_iv/tasks/Основная_задача/working_memory.json
+[08:58:45] [Память] remember(working) → working_memory.json ['description']
+[08:58:45] [Память] long_term ← ['tasks'] → /home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/users/facade_iv/long_term_memory.json
+[08:58:45] [Память] remember(long_term) → long_term_memory.json ['tasks']
+[08:58:45] [Агент] Пользователь facade_iv инициализирован (интервью пройдено)
+[08:58:45] [Память] short_term ← M1 (parent=None) → /home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/users/facade_m/tasks/Основная_задача/sessions/20261013_085845/session.json
+[08:58:45] [Память] short_term ← M2 (parent=M1) → /home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/users/facade_m/tasks/Основная_задача/sessions/20261013_085845/session.json
+[08:58:45] [Агент] M1: ответ получен (доставка: ['invariants', 'long_term', 'profile', 'short_term', 'working']; model=mock/Mock)
+[08:58:45] [Фасад] user=facade_m model=mock/Mock tokens=91 duration=0.001s
+[08:58:45] [Память] short_term ← M1 (parent=None) → /home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/users/facade_m2/tasks/Основная_задача/sessions/20261013_085845/session.json
+[08:58:45] [Память] short_term ← M2 (parent=M1) → /home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/users/facade_m2/tasks/Основная_задача/sessions/20261013_085845/session.json
+[08:58:45] [Агент] M1: ответ получен (доставка: ['invariants', 'long_term', 'profile', 'short_term', 'working']; model=mock/Mock)
+[08:58:45] [Фасад] user=facade_m2 model=mock/Mock tokens=91 duration=0.001s
+[08:58:45] [Память] short_term ← M1 (parent=None) → /home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/users/facade_q0/tasks/Основная_задача/sessions/20261013_085845/session.json
+[08:58:45] [Память] short_term ← M2 (parent=M1) → /home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/users/facade_q0/tasks/Основная_задача/sessions/20261013_085845/session.json
+[08:58:45] [Агент] M1: ответ получен (доставка: ['invariants', 'long_term', 'profile', 'short_term', 'working']; model=mock/Mock)
+[08:58:45] [Фасад] user=facade_q0 model=mock/Mock tokens=91 duration=0.001s
+[08:58:45] [Память] short_term ← M1 (parent=None) → /home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/users/facade_q1/tasks/Основная_задача/sessions/20261013_085845/session.json
+[08:58:45] [Память] short_term ← M2 (parent=M1) → /home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/users/facade_q1/tasks/Основная_задача/sessions/20261013_085845/session.json
+[08:58:45] [Агент] M1: ответ получен (доставка: ['invariants', 'long_term', 'profile', 'short_term', 'working']; model=mock/Mock)
+[08:58:45] [Фасад] user=facade_q1 model=mock/Mock tokens=91 duration=0.001s
+[08:58:46] [Память] short_term ← M1 (parent=None) → /home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/users/facade_err/tasks/Основная_задача/sessions/20261013_085846/session.json
+[08:58:46] [Память] short_term ← M2 (parent=M1) → /home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/users/facade_err/tasks/Основная_задача/sessions/20261013_085846/session.json
+[08:58:46] [Агент] M1: ответ получен (доставка: ['invariants', 'long_term', 'profile', 'short_term', 'working']; model=mock/Mock)
+[08:58:46] [Фасад] user=facade_err model=mock/Mock tokens=92 duration=0.001s
+[08:58:46] [Фасад] ошибка /ask: RuntimeError: сломалось
+[08:59:16] [Память] short_term ← M1 (parent=None) → /home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/users/facade_u1/tasks/Основная_задача/sessions/20261013_085916/session.json
+[08:59:16] [Память] short_term ← M2 (parent=M1) → /home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/users/facade_u1/tasks/Основная_задача/sessions/20261013_085916/session.json
+[08:59:16] [Агент] M1: ответ получен (доставка: ['invariants', 'long_term', 'profile', 'short_term', 'working']; model=mock/Mock)
+[08:59:16] [Фасад] user=facade_u1 model=mock/Mock tokens=91 duration=0.001s
+[08:59:16] [Память] short_term ← M1 (parent=None) → /home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/users/facade_new/tasks/Основная_задача/sessions/20261013_085916/session.json
+[08:59:16] [Память] short_term ← M2 (parent=M1) → /home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/users/facade_new/tasks/Основная_задача/sessions/20261013_085916/session.json
+[08:59:16] [Агент] M1: ответ получен (доставка: ['invariants', 'long_term', 'profile', 'short_term', 'working']; model=mock/Mock)
+[08:59:16] [Фасад] user=facade_new model=mock/Mock tokens=92 duration=0.001s
+[08:59:16] [Хранилище] profile «default» = JSON в SQLite (таблица profiles, user_id=facade_iv)
+[08:59:16] [Память] profile «default» ← ['id', 'name', 'style', 'constraints', 'context'] → /home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/users/facade_iv/profiles/default.json (JSON в SQLite)
+[08:59:16] [Память] remember(profile) → profile.json (['id', 'name', 'style', 'constraints', 'context'])
+[08:59:16] [Память] working ← ['description'] → /home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/users/facade_iv/tasks/Основная_задача/working_memory.json
+[08:59:16] [Память] remember(working) → working_memory.json ['description']
+[08:59:16] [Память] long_term ← ['tasks'] → /home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/users/facade_iv/long_term_memory.json
+[08:59:16] [Память] remember(long_term) → long_term_memory.json ['tasks']
+[08:59:16] [Агент] Пользователь facade_iv инициализирован (интервью пройдено)
+[08:59:16] [Память] short_term ← M1 (parent=None) → /home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/users/facade_m/tasks/Основная_задача/sessions/20261013_085916/session.json
+[08:59:16] [Память] short_term ← M2 (parent=M1) → /home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/users/facade_m/tasks/Основная_задача/sessions/20261013_085916/session.json
+[08:59:16] [Агент] M1: ответ получен (доставка: ['invariants', 'long_term', 'profile', 'short_term', 'working']; model=mock/Mock)
+[08:59:16] [Фасад] user=facade_m model=mock/Mock tokens=91 duration=0.001s
+[08:59:16] [Память] short_term ← M1 (parent=None) → /home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/users/facade_m2/tasks/Основная_задача/sessions/20261013_085916/session.json
+[08:59:16] [Память] short_term ← M2 (parent=M1) → /home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/users/facade_m2/tasks/Основная_задача/sessions/20261013_085916/session.json
+[08:59:16] [Агент] M1: ответ получен (доставка: ['invariants', 'long_term', 'profile', 'short_term', 'working']; model=mock/Mock)
+[08:59:16] [Фасад] user=facade_m2 model=mock/Mock tokens=91 duration=0.001s
+[08:59:16] [Память] short_term ← M1 (parent=None) → /home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/users/facade_q0/tasks/Основная_задача/sessions/20261013_085916/session.json
+[08:59:16] [Память] short_term ← M2 (parent=M1) → /home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/users/facade_q0/tasks/Основная_задача/sessions/20261013_085916/session.json
+[08:59:16] [Агент] M1: ответ получен (доставка: ['invariants', 'long_term', 'profile', 'short_term', 'working']; model=mock/Mock)
+[08:59:16] [Фасад] user=facade_q0 model=mock/Mock tokens=91 duration=0.001s
+[08:59:16] [Память] short_term ← M1 (parent=None) → /home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/users/facade_q1/tasks/Основная_задача/sessions/20261013_085916/session.json
+[08:59:16] [Память] short_term ← M2 (parent=M1) → /home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/users/facade_q1/tasks/Основная_задача/sessions/20261013_085916/session.json
+[08:59:16] [Агент] M1: ответ получен (доставка: ['invariants', 'long_term', 'profile', 'short_term', 'working']; model=mock/Mock)
+[08:59:16] [Фасад] user=facade_q1 model=mock/Mock tokens=91 duration=0.001s
+[08:59:16] [Память] short_term ← M1 (parent=None) → /home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/users/facade_err/tasks/Основная_задача/sessions/20261013_085916/session.json
+[08:59:16] [Память] short_term ← M2 (parent=M1) → /home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/users/facade_err/tasks/Основная_задача/sessions/20261013_085916/session.json
+[08:59:16] [Агент] M1: ответ получен (доставка: ['invariants', 'long_term', 'profile', 'short_term', 'working']; model=mock/Mock)
+[08:59:16] [Фасад] user=facade_err model=mock/Mock tokens=92 duration=0.001s
+[08:59:16] [Фасад] ошибка /ask: RuntimeError: сломалось
+[08:59:56] [RAG] grounding: verdict=partial coverage=0.25 ссылок=0 чисел вне=0
