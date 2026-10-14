@@ -756,6 +756,203 @@ check "RAG7: 2 длинных сценария (dialog_runner, mock)" bash -c "
   cd '$KOD' && API_KEY=test-key '$PY' dev/tests_debug/dialog_runner.py --report '$TMP/dialog.md' 2>&1 | grep -q 'DIALOG OK'
 "
 
+# --- Ревизия 8: локальные LLM, RAG-контур, фасад, шлюз, доступ (этап 12, +15: 44..58) ---
+
+# 44: реестр моделей импортируется; models.json валиден; ≥2 моделей.
+check "R8: реестр моделей + models.json (≥2 моделей)" bash -c "
+  '$PY' - <<'PYEOF'
+import sys, json
+sys.path.insert(0, '$KOD')
+from core.model_registry import ModelRegistry
+reg = ModelRegistry('$KOD/models.json')
+assert len(reg.list()) >= 2, [s.id for s in reg.list()]
+raw = json.load(open('$KOD/models.json', encoding='utf-8'))
+assert raw.get('models'), 'нет секции models'
+assert reg.current_id, 'нет текущей модели'
+print('ok')
+PYEOF
+"
+
+# 45: /model list печатает ≥2 модели и отметку текущей.
+check "R8: --model-list печатает ≥2 модели" bash -c "
+  OUT=\$('$PY' '$KOD/Kod.py' --model-list 2>&1)
+  echo \"\$OUT\" | grep -q 'Всего:' || { echo 'нет заголовка'; exit 1; }
+  N=\$(echo \"\$OUT\" | grep -cE '^[[:space:]]+[* ] (cloud|lmstudio|ollama|mock):')
+  [ \"\$N\" -ge 2 ] || { echo \"моделей: \$N\"; exit 1; }
+"
+
+# 46: подпись модели есть в баннере сессии (видимость модели).
+check "R8: подпись модели в баннере сессии" bash -c "
+  '$PY' - <<'PYEOF'
+import sys, os, tempfile
+sys.path.insert(0, '$KOD')
+sys.argv = ['$KOD/Kod.py']
+import Kod
+from core.agent import Agent
+from core.llm_client import MockClient
+from core.model_registry import ModelRegistry
+from core.prompt_builder import PromptBuilder
+from memory.manager import MemoryManager, default_layers
+from storage.store import Store
+tmp = tempfile.mkdtemp(dir='$TMP')
+store = Store(os.path.join(tmp, 's'))
+mem = MemoryManager(default_layers(store), log=lambda l: None)
+agent = Agent(MockClient(name='Mock'), mem, PromptBuilder('sys'), store, user_id='t')
+reg = ModelRegistry('$KOD/models.json')
+agent.set_model(MockClient(name='Mock'), label=reg.current().display())
+agent.model_registry = reg
+banner = Kod.model_banner(agent)
+assert 'cloud/' in banner, banner
+print('ok')
+PYEOF
+"
+
+# 47: без --model промпт байт-в-байт прежний (регрессия).
+check "R8: без --model промпт байт-в-байт прежний" bash -c "
+  '$PY' '$KOD/dev/tests_debug/unit_runner.py' test_model_switch 2>&1 | grep -q '0 FAIL'
+"
+
+# 48: субагент завершается и пишет лог с подписью модели.
+check "R8: субагент → лог с подписью модели" bash -c "
+  '$PY' - <<'PYEOF'
+import sys, os, tempfile
+sys.path.insert(0, '$KOD')
+import core.subagents as mod
+from core.subagents import SubagentRunner
+from core.model_registry import ModelRegistry
+class FakePopen:
+    def __init__(self, command, **k):
+        self.pid = 1; self.returncode = 0
+        lp = command[command.index('--log') + 1]
+        os.makedirs(os.path.dirname(lp), exist_ok=True)
+        open(lp, 'w', encoding='utf-8').write('[Сессия] модель: lmstudio/test\n')
+    def communicate(self, timeout=None): return ('ok', None)
+    def poll(self): return 0
+tmp = tempfile.mkdtemp(dir='$TMP')
+orig = mod.subprocess.Popen; mod.subprocess.Popen = FakePopen
+try:
+    r = SubagentRunner('$KOD', registry=ModelRegistry('$KOD/models.json'),
+                       stages_dir=os.path.join(tmp, 'stages'), python='/usr/bin/python3')
+    res = r.run('задача', service='lmstudio')
+finally:
+    mod.subprocess.Popen = orig
+assert res['status'] == 'ok'
+assert 'lmstudio/' in open(res['log'], encoding='utf-8').read()
+print('ok')
+PYEOF
+"
+
+# 49: --local-gen выбирает локальную модель (не облако).
+check "R8: --local-gen выбирает локальную модель" bash -c "
+  '$PY' - <<'PYEOF'
+import sys
+sys.path.insert(0, '$KOD')
+from core.model_registry import ModelRegistry
+reg = ModelRegistry('$KOD/models.json')
+local = next((s for s in reg.list(role='chat') if s.local), None)
+assert local is not None and local.service in ('lmstudio', 'ollama'), local
+src = open('$KOD/Kod.py', encoding='utf-8').read()
+assert 'if args.local_gen' in src and 's.local' in src
+print('ok')
+PYEOF
+"
+
+# 50: сравнение генераторов содержит три оси (качество/скорость/стабильность).
+check "R8: сравнение генераторов — три оси" bash -c "
+  grep -q 'трём осям' '$KOD/rag/compare.py' \
+    && grep -q 'Качество' '$KOD/rag/compare.py' \
+    && grep -q 'Скорость' '$KOD/rag/compare.py' \
+    && grep -q 'Стабильность' '$KOD/rag/compare.py'
+"
+
+# 51: профиль параметров попадает в тело запроса к модели (LM Studio).
+check "R8: профиль параметров в теле запроса" bash -c "
+  '$PY' - <<'PYEOF'
+import sys
+sys.path.insert(0, '$KOD')
+import core.llm_client as mod
+from core.llm_client import OpenAICompatClient
+cap = {}
+class R:
+    status_code = 200
+    def raise_for_status(self): pass
+    def json(self): return {'choices': [{'message': {'content': 'ok'}}]}
+def fp(url, json=None, timeout=None):
+    cap['j'] = json; return R()
+orig = mod.requests.post; mod.requests.post = fp
+try:
+    c = OpenAICompatClient('http://127.0.0.1:1234', 'm', max_tokens=700,
+                           params={'temperature': 0.1, 'top_p': 0.9})
+    c.complete([{'role': 'user', 'content': 'x'}])
+finally:
+    mod.requests.post = orig
+assert cap['j']['temperature'] == 0.1
+assert cap['j']['max_tokens'] == 700
+assert cap['j']['top_p'] == 0.9
+print('ok')
+PYEOF
+"
+
+# 52: отчёт «до/после» оптимизации существует.
+check "R8: отчёт «до/после» оптимизации есть" test -s "$KOD/dev/logs_reports/stages/optimize_before_after.md"
+
+# 53: фасад — /ask отвечает, /models отдаёт список, есть поле model (mock, без сети).
+check "R8: фасад /ask+/models (mock)" bash -c "
+  '$PY' - <<'PYEOF'
+import sys, os, tempfile
+sys.path.insert(0, '$KOD')
+sys.argv = [os.path.join('$KOD', 'serve.py')]
+import serve
+serve._agents.clear(); serve._runtime.update(rag=False, mock=True, model=None)
+serve.app.config['TESTING'] = True
+c = serve.app.test_client()
+r = c.get('/models')
+assert r.status_code == 200
+data = r.get_json()
+assert data['current'] and any(m['id'].startswith('lmstudio:') for m in data['models'])
+r2 = c.post('/ask', json={'user': 'acc_facade', 'text': 'привет'})
+assert r2.status_code == 200
+assert r2.get_json()['model']
+print('ok')
+PYEOF
+"
+
+# 54: шлюз требует входа и работает под лимитом (Flask test client, заглушка).
+check "R8: шлюз — вход обязателен + лимит 6/мин" bash -c "
+  '$PY' '$KOD/dev/tests_debug/unit_runner.py' test_gateway 2>&1 | grep -q '0 FAIL'
+"
+
+# 55: юнит туннеля — авторестарт + собственная SSH-сессия (статическая проверка).
+check "R8: юнит туннеля (Restart=always, ControlMaster=no)" bash -c "
+  grep -q 'Restart=always' '$KOD/dev/vps/units/ai9-tunnel.service' \
+    && grep -q 'ControlMaster=no' '$KOD/dev/vps/units/ai9-tunnel.service' \
+    && grep -q 'ControlPath=none' '$KOD/dev/vps/units/ai9-tunnel.service'
+"
+
+# 56: регрессия MCP на VPS — порты 8000/8010/8020 в services.list сохранены.
+check "R8: MCP-порты 8000/8010/8020 сохранены" bash -c "
+  grep -q '8000' '$KOD/dev/vps/services.list' \
+    && grep -q '8010' '$KOD/dev/vps/services.list' \
+    && grep -q '8020' '$KOD/dev/vps/services.list'
+"
+
+# 57: секретов нет в конфигах (models.json, gateway.json, .env.example) и в логах.
+check "R8: секретов нет в конфигах" bash -c "
+  if grep -rE 'sk-[A-Za-z0-9]{10,}' '$KOD/models.json' '$KOD/gateway/gateway.json' '$KOD/.env.example' 2>/dev/null; then
+    echo 'найден ключ sk-'; exit 1; fi
+  if grep -rE 'API_KEY=[A-Za-z0-9]{20,}' '$KOD/models.json' '$KOD/gateway/gateway.json' 2>/dev/null; then
+    echo 'найден API_KEY'; exit 1; fi
+  if grep -qE 'sk-[A-Za-z0-9]{10,}|Bearer [A-Za-z0-9]{20,}' '$KOD/Den_log.md' 2>/dev/null; then
+    echo 'секрет в Den_log.md'; exit 1; fi
+"
+
+# 58: 4 сценария ручной демонстрации на месте и непусты.
+check "R8: 4 сценария демонстрации на месте" bash -c "
+  for f in scen_local_llm scen_rag_local scen_optimize scen_access; do
+    test -s '$KOD/dev/tests_debug/scenario/'\$f'.md' || { echo \"нет \$f.md\"; exit 1; }
+  done
+"
+
 # ИтОГ
 
 echo ""

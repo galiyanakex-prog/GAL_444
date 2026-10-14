@@ -9,3 +9,6 @@
 [20:03:10] [Память] short_term ← M1 (parent=None) → /home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/users/sub_Ответь_одним_словом_готово/tasks/Основная_задача/sessions/20261011_200310/session.json
 [20:03:17] [Память] short_term ← M2 (parent=M1) → /home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/users/sub_Ответь_одним_словом_готово/tasks/Основная_задача/sessions/20261011_200310/session.json
 [20:03:17] [Агент] M1: ответ получен (доставка: ['invariants', 'long_term', 'profile', 'short_term', 'working']; model=lmstudio/Qwen2.5-Coder-3B-Instruct-Distill-Qwen3-Coder-Next-abliterated-Q6_K)
+[14:50:57] [Память] short_term ← M1 (parent=None) → /home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/users/sub_Ответь_одним_словом_готово/tasks/Основная_задача/sessions/20261014_145057/session.json
+[14:51:03] [Память] short_term ← M2 (parent=M1) → /home/u/Документы/111111/Обучение_Курсы/Основной_репозиторий/AI_9/users/sub_Ответь_одним_словом_готово/tasks/Основная_задача/sessions/20261014_145057/session.json
+[14:51:03] [Агент] M1: ответ получен (доставка: ['invariants', 'long_term', 'profile', 'short_term', 'working']; model=lmstudio/Qwen2.5-Coder-3B-Instruct-Distill-Qwen3-Coder-Next-abliterated-Q6_K)
