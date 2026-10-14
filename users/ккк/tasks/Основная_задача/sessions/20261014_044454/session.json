@@ -119,6 +119,30 @@
       "parent_id": "M9",
       "role": "assistant",
       "created_at": "2026-10-14 14:30:12"
+    },
+    {
+      "content": "сообщение для агента-настройщика AI_9 \"если всё ок, запускай следующий этап, коммит готов\"",
+      "source": "user",
+      "scope": "session",
+      "owner": "ккк",
+      "visibility": "private",
+      "source_message_id": "M8",
+      "id": "M11",
+      "parent_id": "M10",
+      "role": "user",
+      "created_at": "2026-10-14 14:33:05"
+    },
+    {
+      "content": "Инструкция для агента AI_9 получена: «если всё ок, запускай следующий этап, коммит готов». Передача подтверждена.",
+      "source": "model",
+      "scope": "session",
+      "owner": "ккк",
+      "visibility": "private",
+      "source_message_id": "M8a",
+      "id": "M12",
+      "parent_id": "M11",
+      "role": "assistant",
+      "created_at": "2026-10-14 14:33:12"
     }
   ]
 }
