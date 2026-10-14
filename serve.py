@@ -247,6 +247,19 @@ def interview():
         _queue_lock.release()
 
 
+@app.route("/interview/questions", methods=["GET"])
+def interview_questions():
+    """Канонические вопросы интервью + отпечаток (для сверки шлюзом, решение №26).
+
+    Тонкий маршрут: «принял → отдал». Источник — `core.agent.INTERVIEW_QUESTIONS`.
+    """
+    from core.agent import INTERVIEW_QUESTIONS, interview_questions_fingerprint
+    questions = [{"key": key, "question": question}
+                 for key, question in INTERVIEW_QUESTIONS]
+    return jsonify({"version": interview_questions_fingerprint(),
+                    "questions": questions})
+
+
 @app.route("/state", methods=["GET"])
 def state():
     """?user=… → модель, RAG, стадия задачи, жив ли сервис."""

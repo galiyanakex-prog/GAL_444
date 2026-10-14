@@ -15,6 +15,7 @@
 """
 from dataclasses import asdict, replace
 from datetime import datetime
+import hashlib
 import json
 import re
 import time
@@ -40,6 +41,26 @@ from core.invariants import (
 # живого ключа: распознаёт известный стек/фреймворк/признаки зависимости и схемы БД.
 KNOWN_FRAMEWORKS = ("fastapi", "django", "flask")
 KNOWN_LANGUAGES = ("python", "kotlin", "java", "javascript", "go")
+
+# Единый источник истины вопросов интервью (решение №26). Порядок и тексты —
+# канон: их читает и CLI-интервью (`Kod.run_interview`), и фасад (`serve.py`),
+# и шлюз на VPS (через снапшот `gateway/questions.json`). Менять только здесь.
+INTERVIEW_QUESTIONS = (
+    ("style", "Какой стиль ответов предпочитаете? (краткий/подробный, формальный/разговорный)"),
+    ("constraints", "Какие ограничения учесть? (стек, темы-табу, языки)"),
+    ("context", "Какой контекст задачи? (чем занимаетесь, цель)"),
+)
+
+
+def interview_questions_fingerprint(questions=None) -> str:
+    """Отпечаток вопросов интервью (sha256) для контроля расхождения хост ↔ VPS.
+
+    Канон нормализации: пары `(key, question)` в фиксированном порядке, без поля
+    `name`; разделитель — `\\n`. Любое изменение текста/порядка меняет отпечаток.
+    """
+    items = questions if questions is not None else INTERVIEW_QUESTIONS
+    canonical = "\n".join(f"{key}\t{question}" for key, question in items)
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
 class PromptContext:
@@ -299,12 +320,11 @@ class Agent:
 
     # --- Идентификация и интервью-инициализация ----------------------------------
     def interview_questions(self) -> list:
-        """Три вопроса персонализации (стиль / констрейнты / контекст)."""
-        return [
-            ("style", "Какой стиль ответов предпочитаете? (краткий/подробный, формальный/разговорный)"),
-            ("constraints", "Какие ограничения учесть? (стек, темы-табу, языки)"),
-            ("context", "Какой контекст задачи? (чем занимаетесь, цель)"),
-        ]
+        """Три вопроса персонализации (стиль / констрейнты / контекст).
+
+        Источник — константа `INTERVIEW_QUESTIONS` (единый канон, решение №26).
+        """
+        return [tuple(item) for item in INTERVIEW_QUESTIONS]
 
     def initialize_user(self, user_id: str, name: str, answers: dict) -> None:
         """Создаёт профиль, дерево задач и первую задачу по смыслу сессии."""

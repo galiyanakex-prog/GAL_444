@@ -665,10 +665,102 @@
   - `dev/logs_reports/stages/facade_local.md` — транскрипт живого прогона.
 - Зависимость: `flask` установлен в `.venv` (единственная новая зависимость хоста;
   в `requirements.txt` ядра **не** вносится — только серверные компоненты).
-- Коммит: предложен оператору (текст — в ШАГЕ 9.6 плана 9); выполнен оператором — хеш: _(ожидается)_.
+- Коммит: предложен оператору (текст — в ШАГЕ 9.6 плана 9); выполнен оператором — хеш: `93d1546`.
 - Перечитывание migr_plan.md: ✅ (2026-10-13)
 - Гейт 9→10: ✅ (`curl POST /ask` → непустой ответ + `model`; прогон без интернета
   (mock, loopback-only); параллельный запрос держится очередью; учёт в `Den_log.md`/
   `tokens.csv`; удаление фасада не меняет терминал; `TaskStage` не изменён; `--mcp-probe`
   и прежняя база зелёные; транскрипт есть; `requirements.txt` без изменений; запись
   «Этап 9» + перечитывание плана)
+
+---
+
+## Этап 10 — Шлюз на VPS: вход, чат, лимиты, туннель (цель: S2)
+
+- Статус: ✅ завершён (код и тесты; выкатка на VPS — за оператором)
+- Было: доступ к агенту только с хоста (фасад `127.0.0.1:8090`); внешнего входа нет.
+- Стало: `gateway/` — Flask-шлюз на VPS (публичный порт **8080**, решение №22):
+  регистрация/вход (пароль — хэшем), интервью при первом входе, чат с историей на VPS,
+  два связанных выпадающих списка провайдер→модель (из хостового `GET /models`),
+  лимиты (6/мин → `429`; > 8000 символов → `413` до фасада), проксирование на фасад
+  через SSH reverse tunnel, лог. MCP `:8000/:8010/:8020` не трогаются (решение №18).
+- Границы: шлюз **не импортирует** `Kod.py`/`rag/` — только HTTP к фасаду; пароли —
+  только хэшами (PBKDF2-HMAC-SHA256, соль на пользователя); секрет сессии — из env
+  (`GATEWAY_SECRET`) или автосекрет `gateway/.secret` (решение №27); `gateway/users.db`
+  и `gateway/.secret` — в `.gitignore`.
+- Туннель (решение №12): SSH reverse (`-R 127.0.0.1:8090:127.0.0.1:8090`), юнит на
+  **хосте** с `Restart=always`; проброшенный порт слушает только loopback VPS; фасад
+  напрямую из интернета недоступен. **Уточнение:** `GatewayPorts` в текущей схеме
+  **не требуется** (шлюз на самом VPS ходит на loopback) — справка в
+  `dev/vps/sshd_gateway.snippet`. WireGuard не применяется.
+- **Доработки внутри этапа 10 (v1.2, 2026-10-14, по 9-пунктному заданию оператора):**
+  - **Окружение шлюза** — отдельный venv `/home/t/doc/.venv` (решение №23), не общий
+    MCP-venv; юнит `ExecStart=/home/t/doc/.venv/bin/python -m gateway.app`; MCP-юниты
+    не тронуты. Зависимости шлюза — `flask` **и** `requests` (решение №24).
+  - **README_gateway.md** — активация venv, установка `flask requests`, копирование
+    файлов через `rsync` (без `git pull`), точный `.gitignore`, расширенная инструкция
+    по туннелю на ХОСТЕ (алиас, ключ, `loginctl enable-linger`, `status`/`journalctl`,
+    зачем `Restart=always`), раздел «Ограничения».
+  - **Rate-limit** зафиксирован явно (решение №25): in-memory, окно 60 с, сбрасывается
+    при рестарте шлюза — комментарий в `app.py`, `_limits_note` в `gateway.json`,
+    раздел «Ограничения» в README, эта запись.
+  - **Вопросы интервью — единый источник истины** (решение №26): канон
+    `core/agent.py` (`INTERVIEW_QUESTIONS` + `interview_questions_fingerprint()`);
+    `serve.py` → `GET /interview/questions`; снапшот `gateway/questions.json` +
+    `gateway/questions.py`; при расхождении отпечатков шлюз показывает «вопросы
+    интервью устарели, обратитесь к администратору» (409) и не пускает в форму;
+    обновление — `gateway/sync_questions.py` (на хосте). Отпечаток канона:
+    `d447fbc523907dc55b89e5976633d6aa8b2e85da4fd53280096b774fd9813088`.
+  - **Лог ответа** (решение №28): текст ответа в лог **не** пишется (приватность);
+    ответ хранится в истории чата на VPS и в `Den_log.md` фасада.
+  - **`Den_log.md`/`tokens.csv`** (решение №28): артефакты-доказательства, из git
+    **не** удаляются; тестовый шум откатывается перед коммитом
+    (`git checkout -- Den_log.md tokens.csv` — оператор). Строки из `.gitignore` убраны
+    (для отслеживаемых файлов правило не действует).
+  - **Секрет сессии** (решение №27): env `GATEWAY_SECRET` → файл `gateway/.secret` →
+    генерация случайного; предсказуемого dev-секрета в коде нет.
+- Живой прогон (хост, `--mock`, loopback): регистрация `302` → интервью `302` →
+  `/api/models` (JSON) → `/api/ask` `200` → лимит (1–6 `200`, 7-й `429`) → длинный
+  запрос `413` → переключение модели `200` → история на VPS → недоступный фасад `503`.
+  Транскрипты: `dev/logs_reports/stages/gateway_access.md`, `stages/tunnel_setup.md`.
+- Регрессия: unit_runner **402 OK / 0 FAIL** (было 391; +11 тестов шлюза); smoke
+  SMOKE OK; scenario SCENARIO OK; check_acceptance **43 из 43**; pytest **403 passed**;
+  `--mcp-probe` exit 0; `git diff --stat requirements.txt` — пусто.
+  (После доработок v1.2: unit_runner **408 OK / 0 FAIL**, pytest **409 passed**;
+  тесты шлюза+фасада — **31 passed**.)
+- Артефакты:
+  - `gateway/app.py`, `gateway/users.py`, `gateway/config.py`, `gateway/gateway.json`,
+    `gateway/questions.py`, `gateway/questions.json`, `gateway/sync_questions.py`,
+    `gateway/templates/{login,register,interview,chat}.html`, `gateway/__init__.py`;
+  - `dev/tests_debug/unit/test_gateway.py` — создан/дополнен (сверка вопросов, автосекрет);
+  - `dev/vps/units/ai9-gateway.service` (VPS, venv `/home/t/doc/.venv`),
+    `dev/vps/units/ai9-tunnel.service` (хост), `dev/vps/sshd_gateway.snippet`,
+    `dev/vps/README_gateway.md`;
+  - `dev/vps/services.list` — добавлен `ai9-gateway:8080`;
+  - `.env.example` — `GATEWAY_SECRET`/`GATEWAY_HOST`/`GATEWAY_PORT`; `.gitignore` —
+    `gateway/users.db`, `gateway/__pycache__/`, `gateway/.secret`.
+- Зависимость: `flask` + `requests` в отдельном venv шлюза `/home/t/doc/.venv`; в
+  `requirements.txt` ядра **не** вносится.
+- Коммит: предложен оператору (текст — в ШАГЕ 10.7 плана 10); выполнен оператором — хеш: _(ожидается)_.
+- Перечитывание migr_plan.md: ✅ (2026-10-14, редакция v1.2)
+- **Живой прогон на VPS (2026-10-14) — гейт 10→11 пройден.** Выкатка по
+  `dev/vps/README_gateway.md`: venv `/home/t/doc/.venv` (`flask 3.1.3`, `requests 2.34.2`),
+  копирование `gateway/` + юнитов + `services.list` + `.gitignore` (через `tar` по SSH —
+  на VPS нет `rsync`), `GATEWAY_SECRET` в `.env`, `deploy_services.sh` → все 4 юнита
+  `active` (`ai9-gateway :8080`), туннель на хосте `active`. Сквозной прогон через
+  **публичный** `http://91.188.212.77:8080`: вход `302`; регистрация `302`; интервью
+  форма `200` (вопросы свежие) → отправка `302`; профиль в `users/live3_*/profile.json`;
+  `/api/models` JSON; `/api/ask` облако `200` (4.45 c); переключение на боевую 3B `200`;
+  `/api/ask` локально `200` (38.9 c, `model`=lmstudio/3B); постоянство выбора модели
+  (2 запроса — оба 3B); лимит 6/мин (1–5 `200`, 6–7 `429`); длинный запрос `413`;
+  история на VPS + переживает рестарт шлюза; лог без текста ответа (`chars=`/`model=`);
+  отпечаток вопросов хост=шлюз (`d447fbc5…`); MCP `:8000/:8010/:8020` `active`;
+  `--mcp-probe` exit 0; офлайн-регрессия **408 OK / 0 FAIL**, pytest **409 passed**;
+  `git diff --stat requirements.txt` пусто. Транскрипт — `stages/gateway_access.md`
+  (раздел «Живой прогон на VPS»).
+  - **Нюансы выкатки (внесены в `README_gateway.md`):** (1) на VPS нет `rsync` →
+    копирование через `tar` по SSH; (2) `ControlMaster auto` в `~/.ssh/config` конфликтует
+    с туннелем (forward регистрируется на master, процесс `ssh` сразу завершается →
+    systemd зацикливает рестарт) → в `ai9-tunnel.service` добавлены
+    `-o ControlMaster=no -o ControlPath=none`.
+- Гейт 10→11: ✅ (все 10 пунктов зелёные; живой внешний прогон выполнен 2026-10-14)

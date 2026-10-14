@@ -111,6 +111,21 @@ def test_interview_initializes_user():
     assert serve._agents["facade_iv"].store.profile_repo.exists("facade_iv")
 
 
+def test_interview_questions_returns_canon_and_fingerprint():
+    """GET /interview/questions → канон вопросов + отпечаток (решение №26)."""
+    _reset()
+    client = _client()
+    resp = client.get("/interview/questions")
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data["version"]
+    keys = [q["key"] for q in data["questions"]]
+    assert keys == ["style", "constraints", "context"]
+    # Отпечаток совпадает с каноном ядра.
+    from core.agent import interview_questions_fingerprint
+    assert data["version"] == interview_questions_fingerprint()
+
+
 # --- переключение модели ------------------------------------------------------
 
 def test_model_switch_changes_label():
