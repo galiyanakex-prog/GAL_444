@@ -39,6 +39,17 @@ def init_db(db_path: str) -> None:
             "  text TEXT NOT NULL,"
             "  model TEXT,"
             "  created_at REAL NOT NULL)")
+        # Идемпотентность повтора (этап 11): один request_id → один ответ.
+        # status: 'pending' (запрос принят, ответа ещё нет) | 'done' (ответ есть).
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS requests ("
+            "  login TEXT NOT NULL,"
+            "  request_id TEXT NOT NULL,"
+            "  status TEXT NOT NULL,"
+            "  answer TEXT,"
+            "  model TEXT,"
+            "  created_at REAL NOT NULL,"
+            "  PRIMARY KEY (login, request_id))")
         conn.commit()
 
 
@@ -108,3 +119,60 @@ def get_history(db_path: str, login: str) -> list:
             "SELECT role, text, model, created_at FROM history "
             "WHERE login = ? ORDER BY id ASC", (login,)).fetchall()
     return [dict(row) for row in rows]
+
+
+# --- Идемпотентность повтора (этап 11) ---------------------------------------
+
+def get_request(db_path: str, login: str, request_id: str):
+    """Состояние запроса по request_id: dict или None.
+
+    Возвращает {'status': 'pending'|'done', 'answer': str|None, 'model': str|None}.
+    """
+    if not request_id:
+        return None
+    with _connect(db_path) as conn:
+        row = conn.execute(
+            "SELECT status, answer, model FROM requests "
+            "WHERE login = ? AND request_id = ?", (login, request_id)).fetchone()
+    return dict(row) if row is not None else None
+
+
+def begin_request(db_path: str, login: str, request_id: str) -> bool:
+    """Регистрирует запрос как 'pending'. False — такой request_id уже был.
+
+    Вызывается ДО обращения к фасаду: повторный запрос с тем же id не пойдёт
+    на фасад заново (защита от дубликата ответа при обрыве).
+    """
+    if not request_id:
+        return True
+    with _connect(db_path) as conn:
+        cur = conn.execute(
+            "INSERT OR IGNORE INTO requests "
+            "(login, request_id, status, answer, model, created_at) "
+            "VALUES (?, ?, 'pending', NULL, NULL, ?)",
+            (login, request_id, time.time()))
+        conn.commit()
+        return cur.rowcount > 0
+
+
+def finish_request(db_path: str, login: str, request_id: str, answer: str,
+                   model: str = None) -> None:
+    """Помечает запрос как 'done' и сохраняет ответ (для повтора)."""
+    if not request_id:
+        return
+    with _connect(db_path) as conn:
+        conn.execute(
+            "UPDATE requests SET status = 'done', answer = ?, model = ? "
+            "WHERE login = ? AND request_id = ?",
+            (answer, model, login, request_id))
+        conn.commit()
+
+
+def drop_request(db_path: str, login: str, request_id: str) -> None:
+    """Убирает запись запроса (если ответ не получен — повтор разрешён снова)."""
+    if not request_id:
+        return
+    with _connect(db_path) as conn:
+        conn.execute("DELETE FROM requests WHERE login = ? AND request_id = ?",
+                     (login, request_id))
+        conn.commit()

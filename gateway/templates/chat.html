@@ -156,22 +156,40 @@
       const text = inputEl.value.trim();
       if (!text) return;
       noticeEl.textContent = '';
-      addMessage('user', text);
+      // Повтор после обрыва: тот же текст и сохранённый request_id → не
+      // добавляем реплику пользователя в интерфейс второй раз.
+      const isRetry = inputEl.dataset.requestId &&
+                      inputEl.dataset.requestText === text;
+      if (!isRetry) addMessage('user', text);
       inputEl.value = '';
       sendEl.disabled = true;
+      // request_id: повтор после обрыва с тем же id вернёт уже готовый ответ,
+      // не создавая дубликат (идемпотентность, этап 11).
+      let requestId = isRetry ? inputEl.dataset.requestId
+                    : (crypto.randomUUID ? crypto.randomUUID()
+                       : String(Date.now()) + Math.random().toString(16).slice(2));
+      inputEl.dataset.requestId = requestId;
+      inputEl.dataset.requestText = text;
       try {
         const r = await fetch('/api/ask', {
           method: 'POST', headers: {'Content-Type': 'application/json'},
-          body: JSON.stringify({text, provider: providerEl.value, model: modelEl.value})
+          body: JSON.stringify({text, request_id: requestId,
+                                provider: providerEl.value, model: modelEl.value})
         });
         const data = await r.json();
         if (!r.ok) {
           noticeEl.textContent = data.error || ('Ошибка ' + r.status);
         } else {
           addMessage('assistant', data.answer || '', data.model, data.sources);
+          // Успех — сбрасываем сохранённый id, следующий вопрос получит новый.
+          delete inputEl.dataset.requestId;
+          delete inputEl.dataset.requestText;
         }
       } catch (e) {
-        noticeEl.textContent = 'Сервис временно недоступен.';
+        // Обрыв связи: сохраняем текст и request_id, чтобы повтор не дублировал.
+        noticeEl.textContent = 'Связь прервана. Нажмите «Отправить» ещё раз — ' +
+                               'ответ не продублируется.';
+        inputEl.value = text;
       } finally {
         sendEl.disabled = false;
         inputEl.focus();

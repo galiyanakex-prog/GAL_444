@@ -278,6 +278,69 @@ def test_history_persists_on_vps(tmp_path):
     assert len(resp.get_json()["history"]) == len(history)
 
 
+# --- идемпотентность повтора (этап 11) ----------------------------------------
+
+def test_repeat_request_id_returns_same_answer_without_duplicate(tmp_path):
+    """Повтор с тем же request_id → тот же ответ, без дублей и без нового вызова."""
+    app, facade, db = _make(tmp_path)
+    client = app.test_client()
+    _register(client, "jack", "pw")
+    rid = "req-123"
+    first = client.post("/api/ask", json={"text": "вопрос", "request_id": rid})
+    assert first.status_code == 200
+    asks_after_first = sum(1 for c in facade.calls if c[0] == "ask")
+    # Повтор с тем же id.
+    second = client.post("/api/ask", json={"text": "вопрос", "request_id": rid})
+    assert second.status_code == 200
+    assert second.get_json()["answer"] == first.get_json()["answer"]
+    assert second.get_json().get("repeated") is True
+    # На фасад ушёл ровно один запрос (повтор не гонит заново).
+    assert sum(1 for c in facade.calls if c[0] == "ask") == asks_after_first
+    # В истории ровно одна пара user/assistant (нет дублей).
+    history = users_db.get_history(db, "jack")
+    assert sum(1 for m in history if m["role"] == "user") == 1
+    assert sum(1 for m in history if m["role"] == "assistant") == 1
+
+
+def test_different_request_ids_create_separate_answers(tmp_path):
+    """Разные request_id → разные записи (идемпотентность не мешает новым)."""
+    app, facade, db = _make(tmp_path)
+    client = app.test_client()
+    _register(client, "kate", "pw")
+    client.post("/api/ask", json={"text": "раз", "request_id": "a"})
+    client.post("/api/ask", json={"text": "два", "request_id": "b"})
+    assert sum(1 for c in facade.calls if c[0] == "ask") == 2
+    history = users_db.get_history(db, "kate")
+    assert sum(1 for m in history if m["role"] == "user") == 2
+
+
+def test_unavailable_facade_does_not_leave_half_answer(tmp_path):
+    """Обрыв во время генерации не оставляет «половину ответа» в истории."""
+    app, facade, db = _make(tmp_path)
+    client = app.test_client()
+    _register(client, "leo", "pw")
+    facade.unavailable = True
+    resp = client.post("/api/ask", json={"text": "вопрос", "request_id": "x"})
+    assert resp.status_code == 503
+    # Реплики ассистента нет (ответ не получен) — «половины» не записано.
+    history = users_db.get_history(db, "leo")
+    assert not any(m["role"] == "assistant" for m in history)
+    # Запрос снят с «pending»: повтор после восстановления разрешён.
+    assert users_db.get_request(db, "leo", "x") is None
+
+
+def test_pending_request_blocks_duplicate(tmp_path):
+    """Пока запрос в работе (pending), повтор с тем же id → 409, не дубликат."""
+    app, facade, db = _make(tmp_path)
+    client = app.test_client()
+    _register(client, "mia", "pw")
+    # Имитируем «зависший» запрос: pending без ответа.
+    users_db.begin_request(db, "mia", "busy")
+    resp = client.post("/api/ask", json={"text": "вопрос", "request_id": "busy"})
+    assert resp.status_code == 409
+    assert not any(c[0] == "ask" for c in facade.calls)
+
+
 # --- границы: шлюз не тянет ядро агента ---------------------------------------
 
 def test_gateway_does_not_import_agent_core():

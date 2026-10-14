@@ -14,6 +14,8 @@
     ДО обращения к фасаду; лимит частоты — in-memory (решение №25);
   - недоступный фасад → 503 с понятным текстом, не зависание;
   - вопросы интервью — снапшот с отпечатком, сверяется с хостом (решение №26);
+  - идемпотентность повтора (этап 11): один `request_id` → один ответ; повтор
+    после обрыва не дублирует реплики и не гонит запрос на фасад заново;
   - шлюз НЕ импортирует `Kod.py`/`rag/` — только HTTP к фасаду.
 
 Запуск (на VPS):
@@ -21,6 +23,7 @@
 """
 import os
 import sys
+import threading
 import time
 from collections import deque
 
@@ -119,21 +122,26 @@ def create_app(config: dict = None, facade=None, db_path: str = None) -> Flask:
     keep = cfg["history_keep_messages"]
     # Лимит частоты: окно 60 с, счётчик на пользователя.
     # ВАЖНО (решение №25): счётчики живут В ПАМЯТИ процесса и сбрасываются при
-    # рестарте шлюза. Это осознанное ограничение; персистентность — предмет
-    # этапа 11. Значения (6/мин, 8000 символов) — в gateway.json, не в коде.
+    # рестарте шлюза. Это осознанное ограничение (лимит — против случайного
+    # флуда, не против злоумышленника); персистентность решено НЕ вводить
+    # (этап 11). Значения (6/мин, 8000 символов) — в gateway.json, не в коде.
+    # Блокировка — чтобы параллельные запросы не «проскочили» лимит гонкой
+    # (Flask работает в threaded=True).
     rate_window = 60.0
     rate_state = {}
+    rate_lock = threading.Lock()
 
     def _rate_ok(login: str) -> bool:
         """True — запрос разрешён; False — превышен лимит (6/мин)."""
         now = time.time()
-        stamps = rate_state.setdefault(login, deque())
-        while stamps and now - stamps[0] > rate_window:
-            stamps.popleft()
-        if len(stamps) >= limits["requests_per_minute"]:
-            return False
-        stamps.append(now)
-        return True
+        with rate_lock:
+            stamps = rate_state.setdefault(login, deque())
+            while stamps and now - stamps[0] > rate_window:
+                stamps.popleft()
+            if len(stamps) >= limits["requests_per_minute"]:
+                return False
+            stamps.append(now)
+            return True
 
     def _current_user():
         return session.get("login")
@@ -275,20 +283,45 @@ def create_app(config: dict = None, facade=None, db_path: str = None) -> Flask:
         if not _rate_ok(login):
             return jsonify({"error": "Слишком часто, подождите минуту."}), 429
 
+        # Идемпотентность повтора (этап 11): один request_id → один ответ.
+        # Повтор после обрыва с тем же id НЕ гонит запрос на фасад заново и НЕ
+        # дублирует реплики в истории.
+        request_id = (data.get("request_id") or "").strip()
+        if request_id:
+            existing = users_db.get_request(db_path, login, request_id)
+            if existing and existing["status"] == "done":
+                _log("ask_repeat", login=login, request_id=request_id)
+                return jsonify({"answer": existing["answer"],
+                                "model": existing["model"], "sources": [],
+                                "quotes": [], "verdict": "unchecked",
+                                "usage": {}, "duration_seconds": 0.0,
+                                "repeated": True}), 200
+            if existing and existing["status"] == "pending":
+                # Первый запрос ещё в работе (или шлюз упал во время генерации).
+                # Не запускаем второй — иначе получим дубликат ответа.
+                return jsonify({"error": "Запрос уже обрабатывается, подождите."}), 409
+            users_db.begin_request(db_path, login, request_id)
+
         users_db.add_message(db_path, login, "user", text, keep=keep)
         try:
             status, payload = facade.ask(login, text,
                                          provider=data.get("provider"),
                                          model=data.get("model"))
         except FacadeUnavailable:
+            # Ответа нет — снимаем «pending», чтобы повтор был возможен.
+            users_db.drop_request(db_path, login, request_id)
             _log("ask_unavailable", login=login, chars=len(text))
             return jsonify({"error": "Сервис временно недоступен."}), 503
         if status >= 400:
+            users_db.drop_request(db_path, login, request_id)
             return jsonify(payload), status
         answer = payload.get("answer", "")
         model = payload.get("model")
+        # Реплика ассистента пишется ТОЛЬКО после полного ответа: обрыв во время
+        # генерации не оставляет «половину ответа, записанную как полный».
         users_db.add_message(db_path, login, "assistant", answer, model=model,
                              keep=keep)
+        users_db.finish_request(db_path, login, request_id, answer, model=model)
         _log("ask", login=login, chars=len(text), model=model)
         return jsonify(payload), status
 

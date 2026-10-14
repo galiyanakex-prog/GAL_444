@@ -71,6 +71,54 @@
       "parent_id": "M5",
       "role": "assistant",
       "created_at": "2026-10-14 09:58:34"
+    },
+    {
+      "content": "hi",
+      "source": "user",
+      "scope": "session",
+      "owner": "ккк",
+      "visibility": "private",
+      "source_message_id": "M6",
+      "id": "M7",
+      "parent_id": "M6",
+      "role": "user",
+      "created_at": "2026-10-14 11:44:31"
+    },
+    {
+      "content": "Hello! How can I assist you today?",
+      "source": "model",
+      "scope": "session",
+      "owner": "ккк",
+      "visibility": "private",
+      "source_message_id": "M6a",
+      "id": "M8",
+      "parent_id": "M7",
+      "role": "assistant",
+      "created_at": "2026-10-14 11:44:34"
+    },
+    {
+      "content": "Привет! Кто ты?",
+      "source": "user",
+      "scope": "session",
+      "owner": "ккк",
+      "visibility": "private",
+      "source_message_id": "M7",
+      "id": "M9",
+      "parent_id": "M8",
+      "role": "user",
+      "created_at": "2026-10-14 14:30:06"
+    },
+    {
+      "content": "Я полезный ассистент, специально настроенный для помощи с программированием на Python и Bash. Чем могу помочь?",
+      "source": "model",
+      "scope": "session",
+      "owner": "ккк",
+      "visibility": "private",
+      "source_message_id": "M7a",
+      "id": "M10",
+      "parent_id": "M9",
+      "role": "assistant",
+      "created_at": "2026-10-14 14:30:12"
     }
   ]
 }
