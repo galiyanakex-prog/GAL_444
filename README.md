@@ -92,12 +92,36 @@ RagService (индексация корпуса → гибридный поис�
 
 ## Модель памяти
 
-| Тип | Что хранит | Где (файл/хранилище) | Почему так |
-|---|---|---|---|
-| **Краткосрочная** (`ShortTermMemory`, scope=`session`) | текущий диалог — неизменяемые сообщения с `id`/`parent_id` | `users/<id>/tasks/<task>/sessions/<sid>/session.json` | сообщения — история (append-only), их нельзя переписывать; `parent_id` — задел ветвления |
-| **Рабочая** (`WorkingMemory`, scope=`task`) | состояние задачи: `description`, `refs`, `lifecycle_summary`, `decisions`, `constraints`, `facts`, `open_questions`, `current_state`, **`goal`** (цель диалога), **`clarifications`** (уточнения), **`terms`** (термины `{термин: определение}`) | `users/<id>/tasks/<task>/working_memory.json` | это **пересчитываемое состояние**, а не лог сообщений: списки дополняются, скаляры перезаписываются, `terms` — merge |
-| **Долговременная** (`LongTermMemory`, scope=`user`) | `profile_ref` (ССЫЛКА), `tasks[]` (со ссылками и `source_session`), `decisions[]` (`{text, status}` — «выполнена»/«не выполнена»), `knowledge[]` | `users/<id>/long_term_memory.json` | живёт между сессиями и задачами; профиль держится отдельно, здесь — только ссылка (канон куратора) |
-| **Профиль** (`Profile`, scope=`user`) | **несколько профилей** на пользователя: `profile_id`, `name`, `domain`, `triggers[]`, `style` + `constraints` + `context`, `skills[]` (пайплайн) | JSON в SQLite (`profiles(user_id, profile_id)`), зеркала `users/<id>/profiles/<pid>.json` | профили — отдельная сущность в БД, а не часть долговременной памяти; запись слиянием (MERGE); активный профиль подключён к каждому запросу |
+Память агента — это четыре разных «склада» для данных. Ниже — что каждый склад хранит,
+где физически лежит и почему сделано именно так.
+
+- **Краткосрочная память** (`ShortTermMemory`, область видимости — `session`).
+  Что хранит: текущий диалог — сами сообщения, которые нельзя менять, у каждого есть
+  свой `id` и ссылка `parent_id` на «родителя».
+  Где лежит: `users/<id>/tasks/<task>/sessions/<sid>/session.json`.
+  Почему так: сообщения — это история, её только добавляют в конец (append-only), нельзя
+  переписывать; `parent_id` — заготовка на будущее для ветвления диалога.
+- **Рабочая память** (`WorkingMemory`, область видимости — `task`).
+  Что хранит: состояние задачи — `description`, `refs`, `lifecycle_summary`, `decisions`,
+  `constraints`, `facts`, `open_questions`, `current_state`, **`goal`** (цель диалога),
+  **`clarifications`** (уточнения), **`terms`** (термины вида `{термин: определение}`).
+  Где лежит: `users/<id>/tasks/<task>/working_memory.json`.
+  Почему так: это **пересчитываемое состояние**, а не журнал сообщений — списки
+  дополняются, скалярные поля перезаписываются, а `terms` сливаются (merge).
+- **Долговременная память** (`LongTermMemory`, область видимости — `user`).
+  Что хранит: `profile_ref` (только ССЫЛКА на профиль), `tasks[]` (со ссылками и
+  `source_session`), `decisions[]` (каждая запись вида `{text, status}` — «выполнена» /
+  «не выполнена»), `knowledge[]`.
+  Где лежит: `users/<id>/long_term_memory.json`.
+  Почему так: живёт между сессиями и задачами; профиль держится отдельно, здесь — только
+  ссылка (канон куратора).
+- **Профиль** (`Profile`, область видимости — `user`).
+  Что хранит: **несколько профилей** на одного пользователя — `profile_id`, `name`,
+  `domain`, `triggers[]`, `style` + `constraints` + `context`, `skills[]` (пайплайн).
+  Где лежит: JSON в SQLite (таблица `profiles(user_id, profile_id)`), плюс «зеркала»
+  в `users/<id>/profiles/<pid>.json`.
+  Почему так: профили — отдельная сущность в базе, а не часть долговременной памяти;
+  запись идёт слиянием (MERGE); активный профиль подключается к каждому запросу.
 
 Единая точка входа в память — `MemoryManager`: `remember()` (запись с логом маршрута),
 `recall()` (чтение выбранных слоёв), `build_blocks()` (текстовые блоки для промта в порядке
@@ -240,14 +264,17 @@ users/<user_id>/
 Недостаточно добавить правила в системный промт — перед выполнением действия запускается
 **отдельная Python-проверка** («код запрещает, промт рекомендует»).
 
-| Сущность | Назначение |
-|---|---|
-| `Invariant` | одно правило: `id`, `description`, `category`, `severity`, `active` |
-| `ConstraintSet` | набор правил — **отдельная сущность** (не память, не профиль, не диалог) |
-| `ProposedAction` | предлагаемое действие (`technology`, `adds_dependency`, `changes_database_schema`, `language`; расширен MCP-полями `action_type`/`tool_name`/`arguments`) |
-| `InvariantChecker` (ABC) | интерфейс проверки: `check()` (блокирующие) + `warnings()` (`severity="warning"`) |
-| `RuleBasedChecker` | детерминированная реализация: правила по id-неймспейсу, без вызовов LLM |
-| `update_invariant` | изменение правила — только авторизованной операцией (`authorized=True`) |
+- `Invariant` — одно правило: `id`, `description`, `category`, `severity`, `active`.
+- `ConstraintSet` — набор правил, **отдельная сущность** (это не память, не профиль и
+  не диалог).
+- `ProposedAction` — предлагаемое действие (`technology`, `adds_dependency`,
+  `changes_database_schema`, `language`; расширен MCP-полями `action_type`, `tool_name`,
+  `arguments`).
+- `InvariantChecker` (абстрактный) — интерфейс проверки: метод `check()` для блокирующих
+  правил и `warnings()` для правил с `severity="warning"`.
+- `RuleBasedChecker` — детерминированная реализация: правила разбираются по id-неймспейсу,
+  без вызовов LLM.
+- `update_invariant` — изменение правила только авторизованной операцией (`authorized=True`).
 
 Хранение — `users/<id>/tasks/<task>/invariants.json`, **отдельно от диалога**; очистка истории
 не удаляет набор. Блок `[system: invariants]` входит в промт (после профиля, до рабочей
@@ -683,19 +710,17 @@ if config.mcp_enabled:
 
 Семейство `/mcp` (7 базовых форм + команды дня 20; токенов LLM не тратят):
 
-| Команда | Действие |
-|---|---|
-| `/mcp status` | общее состояние подключения + по серверам + версия каталога и число тулов |
-| `/mcp servers` | сконфигурированные серверы (transport, enabled, trust, allowed/denied) |
-| `/mcp tools` | **список доступных инструментов** (имя, description, input-схема) |
-| `/mcp refresh` | re-discovery → registry.refresh() (атомарный swap) → сейв catalog.json |
-| `/mcp connect <id>` | поднять соединение (по умолчанию — все из servers.json); `<id>` — только целевой |
-| `/mcp call <tool> [{json}]` | вызвать инструмент вручную через `ToolExecutor` (policy → вызов → аудит) |
-| `/mcp disconnect` | закрыть соединения (`gateway.stop()` → DISCONNECTED; тулы покидают каталог при refresh) |
-| `/mcp jobs` | список задач планировщика (`state`/`interval`/`runs`) |
-| `/mcp summary [N]` | последняя сохранённая сводка планировщика (без нового запроса к LLM) |
-| `/mcp pipeline <запрос>` | пайплайн `search → summarize → saveToFile` |
-| `/mcp route <текст>` | объяснить выбор инструмента/сервера (без вызова) |
+- `/mcp status` — общее состояние подключения + по серверам + версия каталога и число тулов;
+- `/mcp servers` — сконфигурированные серверы (transport, enabled, trust, allowed/denied);
+- `/mcp tools` — **список доступных инструментов** (имя, description, input-схема);
+- `/mcp refresh` — re-discovery → registry.refresh() (атомарный swap) → сейв catalog.json;
+- `/mcp connect <id>` — поднять соединение (по умолчанию — все из servers.json); `<id>` — только целевой;
+- `/mcp call <tool> [{json}]` — вызвать инструмент вручную через `ToolExecutor` (policy → вызов → аудит);
+- `/mcp disconnect` — закрыть соединения (`gateway.stop()` → DISCONNECTED; тулы покидают каталог при refresh);
+- `/mcp jobs` — список задач планировщика (`state`/`interval`/`runs`);
+- `/mcp summary [N]` — последняя сохранённая сводка планировщика (без нового запроса к LLM);
+- `/mcp pipeline <запрос>` — пайплайн `search → summarize → saveToFile`;
+- `/mcp route <текст>` — объяснить выбор инструмента/сервера (без вызова).
 
 Флаг `--mcp-probe` — **результат задания в one-shot форме**: подключиться → handshake →
 `tools/list` → вывести список инструментов (имя, описание, схема) → корректно закрыться →
@@ -987,8 +1012,8 @@ Store сохраняет конфиг и каталог.   ← users/<id>/integr
 
 7. **Служебное пространство (dev/)** — «проект про проект». Миграция по процессной модели
    «план-эталон → рабочие планы этапов → журнал»; красный гейт → карточка ошибки.
-   Тестовый контур: L1 импорт; L2 unit_runner (290 OK); L3 smoke; L4 scenario; гейт
-   43/43; приёмка 39 критериев — всё без живого ключа и сети, в `.tmp/`, `users/` не
+   Тестовый контур: L1 импорт; L2 unit_runner (412 OK); L3 smoke; L4 scenario; гейт
+   58/58; приёмка 48 критериев — всё без живого ключа и сети, в `.tmp/`, `users/` не
    затрагивается.
 
 **Инвариант всей системы**: детерминизм недетерминированной LLM даёт код — внешний мир
@@ -998,62 +1023,82 @@ Store сохраняет конфиг и каталог.   ← users/<id>/integr
 
 ## Команды REPL
 
-| Команда | Действие |
-|---|---|
-| `/memory` | снимок «какие данные в каком типе памяти» (report по всем слоям) |
-| `/profile` | активный профиль: `style` / `constraints` / `context` |
-| `/profile list` | профили пользователя (`*` default, `>` активный) |
-| `/profile show <id>` | полный JSON профиля |
-| `/profile use <id>` | переключить активный профиль сессии |
-| `/profile new <id>` | создать профиль (мини-интервью) и активировать его |
-| `/profile route <текст>` | показать решение роутера (explain), НЕ переключая |
-| `/profile auto on\|off` | авто-роутинг профиля по каждому запросу |
-| `/tasks` | список задач + отметка активной (`*`) |
-| `/task <имя>` | переключить/создать задачу + загрузка её `task_state.json` |
-| `/task retry` | восстановление из `failed` → `planning` (steps/results/error очищены) |
-| `/plan <цель>` | `new → planning`, план строится и **ожидает утверждения** |
-| `/approve` | утвердить план (`planning → plan_approved`); из других стадий — отказ |
-| `/goto <этап>` | попытка явного перехода (демо контроля: недопустимый → отказ с правилом) |
-| `/transitions` | карта `ALLOWED_TRANSITIONS` + журнал `transition_log` + счётчик отказов |
-| `/step` | один проход автомата |
-| `/run` | крутить автомат до `done`/`failed`/`paused`; из `planning` — останавливается |
-| `/pause` | пауза на любой рабочей стадии (`previous_stage` сохраняется) |
-| `/resume` | продолжение с того же этапа и шага, без повторных объяснений |
-| `/deliver <слои>` | набор доставляемых слоёв, напр. `/deliver profile,working` |
-| `/compare` | ответ с `long_term` и без него — демонстрация влияния памяти |
-| `/summary` | резюме сессий текущей задачи (`sessions_resume.md`) |
-| `/state` | снимок `TaskState` + разрешённые переходы + счётчик отказов + карта |
-| `/invariants` | список инвариантов задачи (`on/off`, id, category, severity, description) |
-| `/invariant add <id> <category> <текст>` | добавить инвариант (сейв `invariants.json`) |
-| `/invariant set <id> <текст> [--yes]` | изменить инвариант — без `--yes` требует подтверждения |
-| `/invariant on\|off <id>` | включить/выключить инвариант |
-| `/check <действие>` | прогнать `ProposedAction` через `InvariantChecker` (демонстрация) |
-| `/tokens` | локальная оценка токенов сессии + указание на CSV-журнал |
-| `/cost` | стоимость обменов (локальная оценка, ₽) |
-| `/mcp status` | состояние MCP-подключения + версия каталога |
-| `/mcp servers` | сконфигурированные MCP-серверы |
-| `/mcp tools` | **список доступных инструментов** (результат задания) |
-| `/mcp refresh` | re-discovery + атомарный swap + сейв catalog.json |
-| `/mcp connect <id>` | поднять соединение с MCP-сервером (по умолчанию — все) |
-| `/mcp call <tool> [{json}]` | вызвать инструмент вручную через `ToolExecutor` |
-| `/mcp disconnect` | закрыть MCP-соединения |
-| `/mcp summary [N]` | последняя сохранённая сводка планировщика (без нового запроса к LLM) |
-| `/mcp jobs` | задачи планировщика (`state`/`interval`/`runs`) |
-| `/mcp pipeline <запрос>` | пайплайн `search → summarize → saveToFile` |
-| `/mcp route <текст>` | объяснить выбор инструмента/сервера (без вызова) |
-| `/rag status` | состояние RAG (вкл/выкл, режим, топ-k, grounding, индекс) |
-| `/rag on\|off` | включить/выключить RAG в сессии |
-| `/rag ingest` | проиндексировать корпус (инкрементально) |
-| `/rag find <запрос>` | поиск со скорами — **почему** выбран чанк |
-| `/rag ask <вопрос>` | ответ с RAG (ответ + источники + цитаты) |
-| `/rag sources` | источники последнего ответа агента (source + section/chunk_id) |
-| `/rag quotes` | цитаты последнего ответа агента (дословные фрагменты чанков) |
-| `/rag verify` | проверка источников/цитат на 10 контрольных вопросах |
-| `/rag check <ответ>` | проверка опоры ответа на последние источники (без LLM) |
-| `/rag stats` | индекс, модель, RAM, кэш, латентность p50/p95, Ollama |
-| `/rag eval` | метрики на golden-датасете |
-| `/help` | список команд |
-| `/exit` | `save_state()` (+ сейв `task_state.json` с `transition_log`) и выход |
+Команды сгруппированы по смыслу.
+
+**Память и профили:**
+
+- `/memory` — снимок «какие данные в каком типе памяти» (report по всем слоям);
+- `/profile` — активный профиль: `style` / `constraints` / `context`;
+- `/profile list` — профили пользователя (`*` default, `>` активный);
+- `/profile show <id>` — полный JSON профиля;
+- `/profile use <id>` — переключить активный профиль сессии;
+- `/profile new <id>` — создать профиль (мини-интервью) и активировать его;
+- `/profile route <текст>` — показать решение роутера (explain), НЕ переключая;
+- `/profile auto on|off` — авто-роутинг профиля по каждому запросу.
+
+**Задачи и состояние автомата:**
+
+- `/tasks` — список задач + отметка активной (`*`);
+- `/task <имя>` — переключить/создать задачу + загрузка её `task_state.json`;
+- `/task retry` — восстановление из `failed` → `planning` (steps/results/error очищены);
+- `/plan <цель>` — `new → planning`, план строится и **ожидает утверждения**;
+- `/approve` — утвердить план (`planning → plan_approved`); из других стадий — отказ;
+- `/goto <этап>` — попытка явного перехода (демо контроля: недопустимый → отказ с правилом);
+- `/transitions` — карта `ALLOWED_TRANSITIONS` + журнал `transition_log` + счётчик отказов;
+- `/step` — один проход автомата;
+- `/run` — крутить автомат до `done`/`failed`/`paused`; из `planning` — останавливается;
+- `/pause` — пауза на любой рабочей стадии (`previous_stage` сохраняется);
+- `/resume` — продолжение с того же этапа и шага, без повторных объяснений;
+- `/deliver <слои>` — набор доставляемых слоёв, напр. `/deliver profile,working`;
+- `/compare` — ответ с `long_term` и без него — демонстрация влияния памяти;
+- `/summary` — резюме сессий текущей задачи (`sessions_resume.md`);
+- `/state` — снимок `TaskState` + разрешённые переходы + счётчик отказов + карта.
+
+**Инварианты:**
+
+- `/invariants` — список инвариантов задачи (`on/off`, id, category, severity, description);
+- `/invariant add <id> <category> <текст>` — добавить инвариант (сейв `invariants.json`);
+- `/invariant set <id> <текст> [--yes]` — изменить инвариант; без `--yes` требует подтверждения;
+- `/invariant on|off <id>` — включить/выключить инвариант;
+- `/check <действие>` — прогнать `ProposedAction` через `InvariantChecker` (демонстрация).
+
+**Токены и стоимость:**
+
+- `/tokens` — локальная оценка токенов сессии + указание на CSV-журнал;
+- `/cost` — стоимость обменов (локальная оценка, ₽).
+
+**MCP-инструменты:**
+
+- `/mcp status` — состояние MCP-подключения + версия каталога;
+- `/mcp servers` — сконфигурированные MCP-серверы;
+- `/mcp tools` — **список доступных инструментов** (результат задания);
+- `/mcp refresh` — re-discovery + атомарный swap + сейв catalog.json;
+- `/mcp connect <id>` — поднять соединение с MCP-сервером (по умолчанию — все);
+- `/mcp call <tool> [{json}]` — вызвать инструмент вручную через `ToolExecutor`;
+- `/mcp disconnect` — закрыть MCP-соединения;
+- `/mcp summary [N]` — последняя сохранённая сводка планировщика (без нового запроса к LLM);
+- `/mcp jobs` — задачи планировщика (`state`/`interval`/`runs`);
+- `/mcp pipeline <запрос>` — пайплайн `search → summarize → saveToFile`;
+- `/mcp route <текст>` — объяснить выбор инструмента/сервера (без вызова).
+
+**RAG:**
+
+- `/rag status` — состояние RAG (вкл/выкл, режим, топ-k, grounding, индекс);
+- `/rag on|off` — включить/выключить RAG в сессии;
+- `/rag ingest` — проиндексировать корпус (инкрементально);
+- `/rag find <запрос>` — поиск со скорами — **почему** выбран чанк;
+- `/rag ask <вопрос>` — ответ с RAG (ответ + источники + цитаты);
+- `/rag sources` — источники последнего ответа агента (source + section/chunk_id);
+- `/rag quotes` — цитаты последнего ответа агента (дословные фрагменты чанков);
+- `/rag verify` — проверка источников/цитат на 10 контрольных вопросах;
+- `/rag check <ответ>` — проверка опоры ответа на последние источники (без LLM);
+- `/rag stats` — индекс, модель, RAM, кэш, латентность p50/p95, Ollama;
+- `/rag eval` — метрики на golden-датасете.
+
+**Прочее:**
+
+- `/help` — список команд;
+- `/exit` — `save_state()` (+ сейв `task_state.json` с `transition_log`) и выход.
 
 Без активной задачи `/step`, `/run`, `/pause`, `/resume`, `/approve`, `/goto` печатают
 подсказку «сначала `/plan <цель>`». `EOFError` / `KeyboardInterrupt` тоже вызывают
@@ -1107,11 +1152,268 @@ python -m integrations.mcp.pipeline_server              # MCP-сервер па�
 `--rag-top-k <N>`, `--rag-threshold <F>`, `--rag-unknown {off,on}`,
 `--rag-reranker {off,lexical}`, `--rag-rewrite {off,llm,heuristic}`, `--rag-config <файл>`,
 `--rag-grounding {off,warn,strict}`, `--rag-multi-query`.
+**Флаги локальных LLM и доступа (Ревизия 8):** `--model <id>` (модель/сервис сессии),
+`--model-list` (печать реестра и выход), `--model-profile <name>` (`default`/`rag-strict`/`fast`),
+`--local-gen` (переключить модель агента на локальную ⇒ генератор RAG локальный),
+`--embed-provider {ollama,lmstudio,hashing}`, `--embed-model <name>`, `--embed-url <url>`
+(провайдер/модель эмбеддингов RAG), `--temperature F`, `--max-tokens N`, `--context-window N`
+(разовое переопределение параметров), `--local-template` (строгий prompt-шаблон под локальный
+RAG-кейс), `--oneshot "<задача>"` (один обмен → ответ → выход), `--subagent-run "<задача>"`,
+`--subagent-service {ollama,lmstudio}`, `--local-only` (запрет облачных моделей в сессии),
+`--rag-gen-compare` + `--gen-modes cloud,local` + `--gen-profile <name>` + `--repeat N` +
+`--gen-report <файл>` + `--gen-resources` (сравнение генераторов и замеры ресурсов).
+
+**Фасад и шлюз (Ревизия 8):** `python serve.py [--mock] [--port 8090]` — тонкий HTTP-вход
+агента на хосте (только `127.0.0.1`); `python -m gateway.app` — веб-шлюз на VPS (публичный
+порт `8080`), обращается к фасаду через SSH reverse tunnel. Подробности — в разделе
+«Локальные LLM и доступ к агенту» и `dev/vps/README_gateway.md`.
 
 Все пути строятся от `BASE_DIR`; ключ — `API_KEY` из `.env` (`load_dotenv()`).
 При `--mock`, отсутствии ключа или `API_KEY=test-key` автоматически выбирается `MockClient`.
 `run.desktop` содержит абсолютные `Exec=`/`Path=` — после переноса на другой хост
 его нужно пересоздать (в `.desktop` переменные окружения не раскрываются).
+
+---
+
+## Локальные LLM и доступ к агенту
+
+> **Ревизия 8.** Эта возможность позволяет агенту работать не только с облачным
+> провайдером (RouterAI), но и с локальной нейросетью на вашем компьютере —
+> без интернета, без отправки данных в облако. Также добавлен веб-шлюз,
+> через который к агенту можно подключиться с другого устройства.
+
+### Что это даёт
+
+- **Приватность.** Запросы с конфиденциальными данными не уходят в облако —
+  они обрабатываются на вашем компьютере.
+- **Работа без интернета.** Если отключить сеть, агент продолжает отвечать
+  через локальную модель.
+- **Доступ с телефона/другого ПК.** Через веб-шлюз на VPS-сервере любой
+  пользователь может зайти на сайт, зарегистрироваться и общаться с агентом.
+
+### Как это устроено (простыми словами)
+
+```
+Ваш компьютер                          VPS-сервер (91.188.212.77)
+┌─────────────────────┐                ┌──────────────────────────┐
+│  LM Studio          │                │  Веб-шлюз (порт 8080)    │
+│  (локальная модель) │                │  (вход, чат, лимиты)     │
+│  порт 1234          │                │                          │
+│                     │  SSH-туннель   │                          │
+│  Ollama             │◄──────────────►│                          │
+│  (эмбеддинги)       │  (туннель)     │                          │
+│  порт 11434         │                │                          │
+│                     │                │                          │
+│  Фасад (serve.py)   │                │                          │
+│  порт 8090          │                │                          │
+│  (только localhost) │                │                          │
+│                     │                │                          │
+│  Агент AI_9         │                │                          │
+│  (память, задачи,   │                │                          │
+│   профили, RAG)     │                │                          │
+└─────────────────────┘                └──────────────────────────┘
+```
+
+1. **Локальная модель** (LM Studio) отвечает на запросы прямо на вашем компьютере.
+2. **Фасад** (`serve.py`) — тонкая прослойка: принимает HTTP-запрос, передаёт агенту,
+   возвращает ответ. Не хранит данные сам — всё в агенте.
+3. **SSH-туннель** — ваш компьютер сам подключается к VPS и пробрасывает порт 8090
+   наружу. Роутер трогать не нужно.
+4. **Веб-шлюз** на VPS — сайт, куда заходят пользователи. Он пересылает запросы
+   через туннель к фасаду, а ответ возвращает в браузер.
+
+### Быстрый старт: локальная модель
+
+#### Шаг 1. Поднять LM Studio
+
+LM Studio — программа, которая запускает нейросеть на вашем компьютере.
+
+```bash
+# 1. Запустить HTTP-сервер (именно это и нужно агенту)
+~/.lmstudio/bin/lms server start
+
+# 2. (Опционально) Загрузить модель заранее — чтобы первый ответ был быстрее
+~/.lmstudio/bin/lms load mradermacher/Qwen2.5-Coder-3B-Instruct-Distill-Qwen3-Coder-Next-abliterated-GGUF:Qwen2.5-Coder-3B-Instruct-Distill-Qwen3-Coder-Next-abliterated.Q6_K.gguf --gpu 0 --context-length 8192
+
+# 3. Проверить, что всё работает
+~/.lmstudio/bin/lms server status   # → "running on port 1234"
+~/.lmstudio/bin/lms ps              # → загруженная модель
+curl -s http://127.0.0.1:1234/v1/models  # → HTTP 200, список моделей
+```
+
+> **Важно:** `lms chat` — это ручной чат в терминале, агенту он не нужен.
+> Главное — `lms server start`. Без него агент не работает.
+>
+> LM Studio может «заснуть» или упасть. Если агент пишет «Сервис временно
+> недоступен» — повторите `lms server start`.
+
+#### Шаг 2. Переключить модель в агенте
+
+```bash
+# Посмотреть список доступных моделей
+python Kod.py --model-list
+
+# В REPL:
+/model list          # все модели
+/model use lmstudio:Qwen2.5-Coder-3B-Instruct-Distill-Qwen3-Coder-Next-abliterated-Q6_K
+# или сразу при запуске:
+python Kod.py --model lmstudio:Qwen2.5-Coder-3B-Instruct-Distill-Qwen3-Coder-Next-abliterated-Q6_K
+```
+
+#### Шаг 3. Субагенты (вспомогательные сессии)
+
+Команда «сделай локально в LM Studio: <задача>» запускает отдельную сессию
+на локальной модели. Также вручную:
+
+```
+/subagent run "проанализируй этот код" --service lmstudio
+```
+
+### Полностью локальный RAG
+
+```bash
+# Поиск по документам + ответ локальной моделью (без интернета)
+python Kod.py --rag --local-gen --user alice
+```
+
+Эмбеддинги берутся из Ollama (`bge-m3`), генерация — из LM Studio.
+Ни одного запроса в интернет.
+
+### Сравнение: облако vs локальная модель
+
+```bash
+# Автоматическое сравнение на 10 вопросах × 3 повтора
+python Kod.py --rag-gen-compare --gen-modes cloud,local --repeat 3
+# Отчёт: dev/logs_reports/stages/rag_local_compare.md
+```
+
+### Оптимизация: профили параметров
+
+В `models.json` три профиля:
+
+- `default` — `temperature` и `max_tokens` берутся как есть у сервиса. Это точка «до»
+  оптимизации, с ней сравнивают улучшения.
+- `rag-strict` — `temperature` = 0.1, `max_tokens` = 700. Для ответов по источникам,
+  где важна точность (фактология).
+- `fast` — `temperature` = 0.3, `max_tokens` = 256. Для черновиков и субагентов.
+
+Применить: `/model profile rag-strict` или `--model-profile rag-strict`.
+
+### Доступ извне: веб-шлюз
+
+#### Для пользователя
+
+1. Открыть `http://91.188.212.77:8080`
+2. Зарегистрироваться (логин + пароль)
+3. Пройти интервью (стиль, ограничения, контекст)
+4. Выбрать модель из выпадающего списка (LM Studio / Qwen2.5-Coder-3B…)
+5. Задавать вопросы — ответ придёт с подписью модели
+
+**Лимиты:** 6 запросов в минуту, максимум 8000 символов в запросе.
+
+#### Для администратора (развёртывание на VPS)
+
+Подробная инструкция — `dev/vps/README_gateway.md`. Кратко:
+
+1. Создать отдельный venv: `/home/t/doc/.venv`
+2. Установить `flask` и `requests`
+3. Скопировать `gateway/` на VPS
+4. Настроить systemd-юниты шлюза и туннеля
+5. Проверить фаервол (порт 8080)
+
+### Команды управления моделью
+
+- `/model` — текущая модель, сервис, профиль;
+- `/model list` — все модели реестра + статус;
+- `/model use <id>` — переключить модель;
+- `/model status` — проверить, жив ли сервис;
+- `/model profile <name>` — применить профиль параметров;
+- `/gen local` / `/gen cloud` — быстро переключить генератор RAG;
+- `/embed status` — провайдер эмбеддингов;
+- `/embed use ollama:bge-m3` — переключить эмбеддер.
+
+### Учёт токенов и модель
+
+Модель видна везде:
+- Баннер при старте: `[Сессия] модель: lmstudio/Qwen2.5-Coder-3B…`
+- Префикс ответа: `[lmstudio/Qwen2.5-Coder-3B…] Агент: …`
+- Лог `Den_log.md`: `model=lmstudio/…`
+- CSV `tokens.csv`: колонка `model`
+- HTTP-ответ: поле `model`
+
+### Конфигурационные файлы
+
+**`models.json`** — реестр моделей и профилей (секретов нет):
+
+```json
+{
+  "current": "cloud:stepfun/step-3.5-flash",
+  "profiles": {
+    "default": {},
+    "rag-strict": {"temperature": 0.1, "max_tokens": 700, "context_window": 8192, "top_p": 0.9},
+    "fast": {"temperature": 0.3, "max_tokens": 256, "context_window": 4096, "top_p": 0.9}
+  },
+  "models": [
+    {"id": "cloud:stepfun/step-3.5-flash", "service": "cloud", "local": false, ...},
+    {"id": "lmstudio:Qwen2.5-Coder-3B-Instruct-Distill-Qwen3-Coder-Next-abliterated-Q6_K",
+     "service": "lmstudio", "local": true,
+     "model": "mradermacher/Qwen2.5-Coder-3B-Instruct-Distill-Qwen3-Coder-Next-abliterated-GGUF:Qwen2.5-Coder-3B-Instruct-Distill-Qwen3-Coder-Next-abliterated.Q6_K.gguf",
+     "base_url": "http://127.0.0.1:1234", "quant": "Q6_K", "context_window": 8192,
+     "profile": "rag-strict", "timeout_seconds": 600}
+  ]
+}
+```
+
+**`gateway/gateway.json`** — настройки шлюза (секретов нет):
+
+```json
+{
+  "host_facade_url": "http://127.0.0.1:8090",
+  "public_port": 8080,
+  "limits": {"requests_per_minute": 6, "max_query_chars": 8000},
+  "session": {"secret_env": "GATEWAY_SECRET", "secret_file": "gateway/.secret"}
+}
+```
+
+### Ограничения
+
+- **Скорость.** Локальная модель на CPU (без GPU) медленнее облачной в ~7 раз.
+  Боевая модель — 3B параметров, Q6_K квантование, файл ~2,5 ГБ.
+- **Rate-limit шлюза in-memory.** При перезапуске шлюза счётчик сбрасывается.
+- **LM Studio может «заснуть».** Повторный `lms server start` лечит.
+- **Квантование.** У боевой модели на диске один тег (Q6_K). Сравнение
+  квантов невозможно — зафиксировано как ограничение среды.
+- **Фасад обрабатывает один запрос одновременно.** Второй ждёт.
+  Это ожидаемо — локальная модель считает одна.
+
+### Как читать отчёты сравнения и логи
+
+Все живые прогоны сохраняются в `dev/logs_reports/stages/` — это обычные текстовые
+файлы, их можно открыть глазами. Главные из них:
+
+- **`final_live_runs.md`** — сводка финальных прогонов всех пяти частей задания.
+  С него удобно начинать: видно, что и где проверялось.
+- **`rag_local_compare.md`** — сравнение «облако против локальной модели».
+  В таблице каждая строка — один ответ. Разбираем колонки:
+  - `must_contain` — сколько обязательных слов из вопроса реально попало в ответ
+    (это качество): `2/2` — всё на месте, `1/2` — половина;
+  - `Латентность, мс` — сколько ждали ответ в миллисекундах (это скорость):
+    30000 мс = 30 секунд;
+  - повторы одного вопроса с одинаковым ответом — это стабильность.
+- **`optimize_before_after.md`** — замер «до/после» оптимизации. Сравнивайте
+  `Латентность` и `must_contain` до применения профиля `rag-strict` и после него.
+- **`subagent_*.md`** — логи субагентов. В начале — id, сервис и модель
+  (`model=lmstudio/…`), дальше — весь обмен целиком.
+- **`access_resilience.md`** — обрывы туннеля и параллельные запросы. Видно, как
+  «убитый» туннель поднимается за 5–12 секунд, а седьмой запрос за минуту получает `429`.
+- **`access_peer_confirm.md`** — подтверждение внешнего пользователя (ккк): живая
+  переписка с чужого устройства через веб-шлюз.
+
+Как читать «вердикт» (опору ответа на источники):
+
+- `ok` — ответ целиком опирается на найденные источники;
+- `partial` — опирается частично;
+- `hallucination` — в ответе есть то, чего в источниках нет (модель «додумала»).
 
 ---
 
@@ -1149,22 +1451,38 @@ retry на HTTP 429 с задержками 2 → 4 → 8 сек, таймаут
 
 Всё — **без живого ключа** (`API_KEY=test-key`, `MockClient`, `FakeMCPTransport`),
 тестовые данные пишутся только в `dev/tests_debug/.tmp/` (в `.gitignore`), рабочие
-`users/` не затрагиваются. `pytest` в venv недели отсутствует, поэтому L2 идёт через
-собственный лёгкий раннер `unit_runner.py`.
+`users/` не затрагиваются. `pytest` установлен в `.venv` (9.1.1) как **дополнительный**
+раннер; L2 идёт через собственный лёгкий раннер `unit_runner.py`.
 
-| Уровень | Команда | Результат |
-|---|---|---|
-| L1 | `python -m py_compile Kod.py core/*.py memory/*.py storage/*.py integrations/mcp/*.py` | exit 0 |
-| L2 | `env -u API_KEY python dev/tests_debug/unit_runner.py` | **290 OK, 0 FAIL** (31 модуль) |
-| L3 | `API_KEY=test-key python dev/tests_debug/smoke.py` | SMOKE OK, exit 0 |
-| L4 | `API_KEY=test-key python dev/tests_debug/scenario.py` | SCENARIO OK, exit 0 |
-| Гейт | `API_KEY=test-key bash dev/tests_debug/check_acceptance.sh` | **43 из 43 ✅, exit 0** |
-| Диалоги | `API_KEY=test-key python dev/tests_debug/dialog_runner.py` | DIALOG OK, exit 0 (2 длинных сценария) |
-| Интеграция | `timeout 60 python Kod.py --mcp-probe` (реальный HTTP-сервер) | READY → 4 тула (1 `time` + 3 `weather`) → DISCONNECTED, exit 0 (не гейт — живой прогон) |
-| Живой tool-use | `printf 'который час в Москве?\n/exit\n' \| python Kod.py --user u --mcp` | LLM вызывает `mcp.time.get_time` → ответ (не гейт — живой прогон) |
-| Живой RAG | `python Kod.py --rag-ask "…"` / `--rag-eval` / `--rag-verify` (ключ из `.env`) | ответ + источники + цитаты; hit-rate@5 = 0.8824; источники/цитаты 10/10 (не гейт — живой прогон) |
+**Уровни проверок** (чем выше номер, тем крупнее проверка):
+
+- **L1 — компиляция.** Команда:
+  `python -m py_compile Kod.py core/*.py memory/*.py storage/*.py integrations/mcp/*.py`.
+  Результат: exit 0 (файлы синтаксически корректны).
+- **L2 — юнит-тесты.** Команда:
+  `env -u API_KEY python dev/tests_debug/unit_runner.py`.
+  Результат: **412 OK, 0 FAIL** (42 модуля).
+- **L3 — смоук.** Команда: `API_KEY=test-key python dev/tests_debug/smoke.py`.
+  Результат: SMOKE OK, exit 0.
+- **L4 — сценарии.** Команда: `API_KEY=test-key python dev/tests_debug/scenario.py`.
+  Результат: SCENARIO OK, exit 0.
+- **Гейт приёмки.** Команда:
+  `API_KEY=test-key bash dev/tests_debug/check_acceptance.sh`.
+  Результат: **58 из 58 ✅, exit 0**.
+- **Диалоги.** Команда: `API_KEY=test-key python dev/tests_debug/dialog_runner.py`.
+  Результат: DIALOG OK, exit 0 (2 длинных сценария).
+- **Интеграция (живой прогон, не гейт).** Команда: `timeout 60 python Kod.py --mcp-probe`
+  (реальный HTTP-сервер). Результат: READY → 4 тула (1 `time` + 3 `weather`) →
+  DISCONNECTED, exit 0.
+- **Живой tool-use (не гейт).** Команда:
+  `printf 'который час в Москве?\n/exit\n' | python Kod.py --user u --mcp`.
+  Результат: LLM вызывает `mcp.time.get_time` → ответ.
+- **Живой RAG (не гейт).** Команда:
+  `python Kod.py --rag-ask "…"` / `--rag-eval` / `--rag-verify` (ключ из `.env`).
+  Результат: ответ + источники + цитаты; hit-rate@5 = 0.8824; источники/цитаты 10/10.
 
 **Состав тестовых модулей:**
+
 
 - `unit/test_mcp.py` — контракты (квалифицированное имя, source/provider); discovery-
   нормализация; реестр (add/refresh/snapshot, коллизии, unregister, get-ошибка);
@@ -1176,18 +1494,29 @@ retry на HTTP 429 с задержками 2 → 4 → 8 сек, таймаут
   ключи); LLM tool-use (парсеры, агентный цикл, блок `[tools]`);
 - `unit/test_rag_*.py` — интеграция (16), grounding (18), cache (15), rerank (10),
   verify (10), working_memory (9), service;
+- `unit/test_llm_local.py` — `OpenAICompatClient`/`OllamaClient` (12 тестов);
+- `unit/test_model_switch.py` — `/model` + отображение модели (9 тестов);
+- `unit/test_subagents.py` — запуск/таймаут/безопасность (10 тестов);
+- `unit/test_rag_local_gen.py` — локальная генерация в RAG (14 тестов);
+- `unit/test_rag_gen_compare.py` — сравнение генераторов (10 тестов);
+- `unit/test_llm_optimize.py` — профили + prompt-шаблон (15 тестов);
+- `unit/test_llm_resources.py` — замеры ресурсов (12 тестов);
+- `unit/test_facade.py` — фасад: маршруты, очередь, подпись (14 тестов);
+- `unit/test_gateway.py` — вход, регистрация, лимиты, прокси, вопросы интервью (11 тестов);
 - L4 сценарии — `scenario_mcp_discovery`, `scenario_llm_tool_use`, `scenario_tool_denied`,
   `scenario_multiserver_flow` + базовые (+ `scen_rag.md` — сценарий ручной демонстрации);
 - `dialog_runner.py` — прогон 2 длинных диалоговых сценариев (`scen_dialog_A.md` — 12
   сообщений, `scen_dialog_B.md` — 13) с активным RAG: поиск на каждом обмене, источники
   в каждом ответе, цель/термины в памяти задачи;
-- гейт `check_acceptance.sh` — **43 проверки** (25 прежних + 8 RAG Ревизии 6 + 10 RAG
-  Ревизии 7: импорт `rewrite/sources/citations/verify`; rewrite снимает шум и подтягивает
-  термины; источники (дедуп/сорт) и цитаты; режим «не знаю» без вызова LLM; `--rag-ask`
-  даёт источники+цитаты; `--rag-verify` 10/10; высокий порог → «не знаю»; 4 режима ответа;
-  `WorkingMemory` round-trip; 2 длинных сценария). Идемпотентен, `users/` не трогает.
+- гейт `check_acceptance.sh` — **58 проверок** (25 прежних + 8 RAG Ревизии 6 + 10 RAG
+  Ревизии 7 + 15 Ревизии 8: реестр моделей и `models.json`; `--model-list`; подпись модели
+  в баннере; без `--model` промпт байт-в-байт прежний; субагент пишет лог с подписью;
+  `--local-gen` выбирает локальную модель; сравнение генераторов — три оси; профиль
+  параметров в теле запроса; отчёт «до/после»; фасад `/ask`+`/models`; шлюз — вход +
+  лимит 6/мин; юнит туннеля; MCP-порты сохранены; секретов в конфигах нет; 4 сценария
+  демонстрации). Идемпотентен, `users/` не трогает.
 
-**Человеческая версия приёмки** — **39 критериев, 39/39 зелёных** — в
+**Человеческая версия приёмки** — **48 критериев, 48/48 зелёных** — в
 [`dev/Проверка.md`](dev/Проверка.md):
 
 - **строки 1–35** — комплектность и сборка, четыре слоя памяти, иерархия хранилища,
@@ -1208,42 +1537,114 @@ retry на HTTP 429 с задержками 2 → 4 → 8 сек, таймаут
   «инструмент ≠ переход», регрессия MCP off.
 
 Машиночитаемый дубль — `dev/tests_debug/check_acceptance.sh`. Сценарии живой
-демонстрации куратору — `dev/tests_debug/scenario/scen_1.md` и `scen_rag.md`,
-`dev/Проверка.md` (три сценария дня 20).
+демонстрации куратору — `dev/tests_debug/scenario/scen_1.md`, `scen_rag.md`,
+`scen_local_llm.md`, `scen_rag_local.md`, `scen_optimize.md`, `scen_access.md`,
+`dev/Проверка.md` (48 критериев Ревизии 8).
 
 ### Демонстрации задания
 
-| Что проверяем | Как посмотреть | Что видно |
-|---|---|---|
-| **Соединение устанавливается** | `python Kod.py --mcp-probe` | «[MCP] Соединение установлено (READY)» — handshake initialize прошёл (реальный сервер) |
-| **Список инструментов корректно возвращается** | `--mcp-probe` или `/mcp tools` после `/mcp refresh` | 4 тула: `mcp.time.get_time` + `mcp.weather.search_locations`, `get_forecast_metadata`, `get_weather_forecast` — имя, description, input-схема |
-| **Список выводится кодом** | `python Kod.py --mcp-probe` (exit 0) | печать каждого тула + «Всего инструментов: 4» + чистое закрытие (DISCONNECTED) |
-| **Настоящий вызов инструмента** | `/mcp call mcp.weather.search_locations {"query":"Москва"}` | результат с координатами Москвы (55.75204, 37.61781) |
-| **Полный LLM tool-use** | `--mcp` → «найди город Москва» | LLM сам вызывает `search_locations` → ответ с координатами Москвы |
-| **Инструмент задания** | `--mcp` → «который час в Москве?» | LLM сам вызывает `mcp.time.get_time` → ответ (результат использован) |
-| **Ручной вызов `get_time`** | `/mcp call mcp.time.get_time {"timezone_name":"Europe/Moscow"}` | ISO 8601 `2026-09-27T12:52:07+03:00`; `{}` → время в `UTC` |
-| REPL-флоу MCP | `--mcp` → `/mcp connect` → `/mcp tools` → `/mcp refresh` → `/mcp status` → `/mcp disconnect` | READY → каталог (4 тула) → атомарный refresh + сейв catalog.json → статус → DISCONNECTED |
-| Изоляция прав | `denied_tools` в `servers.json` → `/mcp refresh` → `/mcp tools` | запрещённый тул не попадает в discovery |
-| Недоступный сервер — деградация | `/mcp connect` при упавшем сервере | FAILED/DEGRADED, тулов нет, REPL жив |
-| Планировщик 24/7 | `python Kod.py --mcp --scheduler` → `/mcp jobs` → `/mcp summary` | фоновые задачи поднимаются внешним worker; сводка отдаётся без запроса к LLM |
-| Пайплайн инструментов | `/mcp pipeline <запрос>` | цепочка `search → summarize → saveToFile`, данные передаются между шагами, аудит — 3 записи `succeeded` |
-| Несколько серверов | `/mcp servers` / `/mcp tools` / `/mcp route <текст>` | инструменты квалифицированы `mcp.<server>.<tool>`, маршрутизация и объяснение выбора |
-| Какие данные попадают в слой | `/memory`, журнал `Den_log.md` | `[Память] … ← …` по каждому слою |
-| Как память влияет на ответы | `/compare` | два ответа: с `long_term` и без него |
-| Дозированная доставка | `/deliver profile,working` | слой `long_term` физически отсутствует в промте |
-| Недопустимый переход блокируется кодом | `/plan <цель>` → `/goto implementation` → `/state` | «ОТКАЗАНО», правило, состояние не изменилось, запись `allowed: false` |
-| Утверждение плана — контрольный пункт | `/plan` → `/run` (остановка) → `/approve` → `/run` | `/run` не обходит утверждение |
-| Конфликт запроса и инварианта | «Перепиши наш API на FastAPI» (при инварианте Django) | отказ: id правила, причина, альтернатива |
-| **RAG: индексация корпуса** | `./run.sh --rag-ingest` | дельта индексации + число чанков (117 / 9 документов) |
-| **RAG: гибридный поиск** | `./run.sh --rag-search "как считается бюджет токенов"` | топ-5 источников со скорами и метаданными (`source`/`section`/`chunk_id`) |
-| **RAG: ответ с источниками и цитатами** | `./run.sh --rag-ask "как считается бюджет токенов"` | ответ + список источников (`source`+`section`/`chunk_id`) + дословные цитаты из чанков |
-| **RAG: проверка формата на 10 вопросах** | `./run.sh --rag-verify` | источники 10/10, цитаты 10/10, смысл=цитаты (отчёт) |
-| **RAG: режим «не знаю»** | `./run.sh --rag-ask "квантовые киты в борще" --rag-threshold 0.99` | `insufficient`, «В источниках нет ответа…», LLM не вызывается |
-| **RAG: блок `[rag]` в промпте** | `./run.sh --rag --user demo` → вопрос | блок `[rag]` после `[tools]`, до `[long_term]`; ответ со ссылками `[doc_id#chunk_id]` |
-| **RAG: проверка опоры (grounding)** | `/rag check <ответ с выдуманным числом>` | `Вердикт: hallucination`, «числа вне источников» |
-| **RAG: метрики и сравнение** | `./run.sh --rag-eval` / `--rag-compare` | recall/hit-rate/mrr/ndcg; таблица «стратегия × режим» + вердикт |
-| **RAG: длинные диалоги** | `python dev/tests_debug/dialog_runner.py` | 2 сценария (12 и 13 сообщений): поиск на каждом обмене, источники в каждом ответе, цель/термины в памяти |
-| **RAG: без `--rag` — регрессия** | `./run.sh --user demo` (без флага) | блок `[rag]` отсутствует, `rag` не импортируется |
+**MCP — подключение и инструменты:**
+
+- **Соединение устанавливается.** Как посмотреть: `python Kod.py --mcp-probe`.
+  Что видно: «[MCP] Соединение установлено (READY)» — handshake `initialize` прошёл
+  (реальный сервер).
+- **Список инструментов корректно возвращается.** Как: `--mcp-probe` или `/mcp tools`
+  после `/mcp refresh`. Что видно: 4 тула — `mcp.time.get_time` плюс
+  `mcp.weather.search_locations`, `get_forecast_metadata`, `get_weather_forecast`
+  (имя, description, input-схема).
+- **Список выводится кодом.** Как: `python Kod.py --mcp-probe` (exit 0).
+  Что видно: печать каждого тула + «Всего инструментов: 4» + чистое закрытие (DISCONNECTED).
+- **Настоящий вызов инструмента.** Как:
+  `/mcp call mcp.weather.search_locations {"query":"Москва"}`.
+  Что видно: результат с координатами Москвы (55.75204, 37.61781).
+- **Полный LLM tool-use.** Как: `--mcp` → «найди город Москва».
+  Что видно: LLM сам вызывает `search_locations` → ответ с координатами Москвы.
+- **Инструмент задания.** Как: `--mcp` → «который час в Москве?».
+  Что видно: LLM сам вызывает `mcp.time.get_time` → ответ (результат использован).
+- **Ручной вызов `get_time`.** Как:
+  `/mcp call mcp.time.get_time {"timezone_name":"Europe/Moscow"}`.
+  Что видно: ISO 8601 `2026-09-27T12:52:07+03:00`; `{}` → время в `UTC`.
+- **REPL-флоу MCP.** Как: `--mcp` → `/mcp connect` → `/mcp tools` → `/mcp refresh` →
+  `/mcp status` → `/mcp disconnect`. Что видно: READY → каталог (4 тула) → атомарный
+  refresh + сейв catalog.json → статус → DISCONNECTED.
+- **Изоляция прав.** Как: `denied_tools` в `servers.json` → `/mcp refresh` → `/mcp tools`.
+  Что видно: запрещённый тул не попадает в discovery.
+- **Недоступный сервер — деградация.** Как: `/mcp connect` при упавшем сервере.
+  Что видно: FAILED/DEGRADED, тулов нет, REPL жив.
+- **Планировщик 24/7.** Как: `python Kod.py --mcp --scheduler` → `/mcp jobs` →
+  `/mcp summary`. Что видно: фоновые задачи поднимаются внешним worker; сводка отдаётся
+  без запроса к LLM.
+- **Пайплайн инструментов.** Как: `/mcp pipeline <запрос>`. Что видно: цепочка
+  `search → summarize → saveToFile`, данные передаются между шагами, аудит — 3 записи
+  `succeeded`.
+- **Несколько серверов.** Как: `/mcp servers` / `/mcp tools` / `/mcp route <текст>`.
+  Что видно: инструменты квалифицированы `mcp.<server>.<tool>`, маршрутизация и
+  объяснение выбора.
+
+**Память, инварианты, состояние:**
+
+- **Какие данные попадают в слой.** Как: `/memory`, журнал `Den_log.md`.
+  Что видно: `[Память] … ← …` по каждому слою.
+- **Как память влияет на ответы.** Как: `/compare`. Что видно: два ответа — с `long_term`
+  и без него.
+- **Дозированная доставка.** Как: `/deliver profile,working`. Что видно: слой `long_term`
+  физически отсутствует в промте.
+- **Недопустимый переход блокируется кодом.** Как: `/plan <цель>` → `/goto implementation`
+  → `/state`. Что видно: «ОТКАЗАНО», правило, состояние не изменилось, запись `allowed: false`.
+- **Утверждение плана — контрольный пункт.** Как: `/plan` → `/run` (остановка) →
+  `/approve` → `/run`. Что видно: `/run` не обходит утверждение.
+- **Конфликт запроса и инварианта.** Как: «Перепиши наш API на FastAPI» (при инварианте
+  Django). Что видно: отказ — id правила, причина, альтернатива.
+
+**RAG:**
+
+- **RAG: индексация корпуса.** Как: `./run.sh --rag-ingest`. Что видно: дельта индексации
+  + число чанков (117 / 9 документов).
+- **RAG: гибридный поиск.** Как: `./run.sh --rag-search "как считается бюджет токенов"`.
+  Что видно: топ-5 источников со скорами и метаданными (`source`/`section`/`chunk_id`).
+- **RAG: ответ с источниками и цитатами.** Как:
+  `./run.sh --rag-ask "как считается бюджет токенов"`. Что видно: ответ + список
+  источников (`source`+`section`/`chunk_id`) + дословные цитаты из чанков.
+- **RAG: проверка формата на 10 вопросах.** Как: `./run.sh --rag-verify`.
+  Что видно: источники 10/10, цитаты 10/10, смысл = цитаты (отчёт).
+- **RAG: режим «не знаю».** Как:
+  `./run.sh --rag-ask "квантовые киты в борще" --rag-threshold 0.99`.
+  Что видно: `insufficient`, «В источниках нет ответа…», LLM не вызывается.
+- **RAG: блок `[rag]` в промпте.** Как: `./run.sh --rag --user demo` → вопрос.
+  Что видно: блок `[rag]` после `[tools]`, до `[long_term]`; ответ со ссылками
+  `[doc_id#chunk_id]`.
+- **RAG: проверка опоры (grounding).** Как: `/rag check <ответ с выдуманным числом>`.
+  Что видно: `Вердикт: hallucination`, «числа вне источников».
+- **RAG: метрики и сравнение.** Как: `./run.sh --rag-eval` / `--rag-compare`.
+  Что видно: recall/hit-rate/mrr/ndcg; таблица «стратегия × режим» + вердикт.
+- **RAG: длинные диалоги.** Как: `python dev/tests_debug/dialog_runner.py`.
+  Что видно: 2 сценария (12 и 13 сообщений) — поиск на каждом обмене, источники в каждом
+  ответе, цель/термины в памяти.
+- **RAG: без `--rag` — регрессия.** Как: `./run.sh --user demo` (без флага).
+  Что видно: блок `[rag]` отсутствует, `rag` не импортируется.
+
+**Локальные LLM и доступ (Ревизия 8):**
+
+- **Локальная модель.** Как: `python Kod.py --model-list`. Что видно: список моделей из
+  `models.json` (lmstudio, ollama, routerai).
+- **Переключение модели.** Как: `python Kod.py --model lmstudio:Qwen2.5-Coder-3B`.
+  Что видно: баннер показывает подпись модели; промпт без `api_key`.
+- **Субагент на локальной модели.** Как:
+  `python Kod.py --subagent-run "проанализируй код" --service lmstudio`.
+  Что видно: отдельная сессия, лог в `dev/tests_debug/.tmp/`.
+- **Локальный RAG.** Как: `python Kod.py --rag --local-gen --user alice`.
+  Что видно: эмбеддинги из Ollama, генерация из LM Studio, без интернета.
+- **Сравнение генераторов.** Как:
+  `python Kod.py --rag-gen-compare --gen-modes cloud,local --repeat 3`.
+  Что видно: отчёт — три оси (качество, скорость, стоимость).
+- **Профиль параметров.** Как: `python Kod.py --model-profile rag-strict`.
+  Что видно: профиль в теле запроса (temperature, max_tokens, context_window).
+- **Фасад (HTTP-вход).** Как: `python serve.py` → `curl http://127.0.0.1:8090/ask`.
+  Что видно: запрос → агент → ответ; подпись модели в ответе.
+- **Шлюз (веб-вход).** Как: `python -m gateway.app` → браузер `http://<VPS>:8080`.
+  Что видно: регистрация, чат, лимит 6/мин, прокси к фасаду.
+- **Одношаговый режим.** Как: `python Kod.py --oneshot "какой сегодня день?"`.
+  Что видно: один обмен → ответ → выход (exit 0).
 
 ---
 
@@ -1259,11 +1660,11 @@ AI_9/dev/
 ├── migr_2_plan.md                # мастер-план Ревизии 7.1 (актуализация)
 ├── migr_2_plan_0.md … migr_2_plan_9.md  # рабочие планы Ревизии 7.1
 ├── migr_log.md                   # журнал миграции «было → стало → проверка → статус»
-├── Проверка.md                   # чек-лист приёмки (39 критериев + три сценария дня 20)
-├── old_vers/                     # история прошлых ревизий (1…7)
+├── Проверка.md                   # чек-лист приёмки (48 критериев Ревизии 8)
+├── old_vers/                     # история прошлых ревизий (1…8)
 ├── meta_promt/                   # метапромты (вспомогательные промты)
 ├── tests_debug/
-│   ├── check_acceptance.sh       # гейт приёмки (43 проверки)
+│   ├── check_acceptance.sh       # гейт приёмки (58 проверок)
 │   ├── unit_runner.py            # L2-раннер (без pytest)
 │   ├── smoke.py                  # L3-смоук (+ MCP-прогон + tool-use)
 │   ├── scenario.py               # L4-сценарии (+ mcp_discovery, llm_tool_use, tool_denied, multiserver_flow)
@@ -1276,7 +1677,13 @@ AI_9/dev/
 │   │   ├── scen_1.md             # сценарий ручной демонстрации MCP
 │   │   ├── scen_rag.md           # сценарий ручной демонстрации RAG
 │   │   ├── scen_dialog_A.md      # длинный диалог A (12 сообщений, RAG-модуль)
-│   │   └── scen_dialog_B.md      # длинный диалог B (13 сообщений, инварианты)
+│   │   ├── scen_dialog_B.md      # длинный диалог B (13 сообщений, инварианты)
+│   │   ├── scen_local_llm.md     # локальная модель + субагент (Ревизия 8)
+│   │   ├── scen_rag_local.md     # полностью локальный RAG (Ревизия 8)
+│   │   ├── scen_optimize.md      # профили параметров + prompt-шаблон (Ревизия 8)
+│   │   ├── scen_rag_gen_compare.md # сравнение генераторов (Ревизия 8)
+│   │   ├── scen_access.md        # фасад + шлюз + туннель (Ревизия 8)
+│   │   └── scen_model_switch.md  # переключение моделей (Ревизия 8)
 │   └── .tmp/                     # единственное место прогонов (.gitignore)
 ├── logs_reports/                 # stages/ + errors/ + archive/
 └── vps/                          # инфраструктурный контур VPS (units/, evidence/, скрипты)
@@ -1335,31 +1742,47 @@ AI_9/dev/
 
 ### Рабочие артефакты (продукт)
 
-| Артефакт | Назначение |
-|---|---|
-| `Kod.py` + `core/` + `memory/` + `storage/` | агент дней 11–15 без регрессии + каталог инструментов + tool-use + RAG |
-| `core/tools.py` | внутренняя модель: ToolDescriptor / ToolCallRequest / ToolExecutionResult / ToolExecutionState / ToolProvider / ToolCatalogSnapshot |
-| `core/tool_registry.py` | ToolRegistry: каталогизация, атомарный snapshot, refresh |
-| `core/tool_policy.py` | ToolPolicy: проверки вызова (enabled/схема/стадия/инварианты/подтверждение) |
-| `core/tool_executor.py` | ToolExecutor: policy → вызов → аудит |
-| `core/tool_routing.py` / `core/tool_pipeline.py` | выбор инструмента; пайплайн из инструментов |
-| `integrations/mcp/*` | MCP-слой: config / transport (stdio + HTTP + fake) / client / gateway / provider / demo_server / scheduler_server / pipeline_server |
-| `integrations/scheduler/*` | ядро планировщика (stdlib): models / store / runner / aggregator |
-| `rag/*` | RAG-модуль: config / corpus / chunking / embedding / index / retrieval / rerank / rewrite / cache / grounding / eval / compare / sources / citations / verify / service |
-| `users/<id>/integrations/mcp/{servers,catalog}.json` | конфиг серверов + снимок каталога (через Store) |
-| `users/<id>/tasks/<task>/tool_audit.jsonl` | история вызовов инструментов (через Store) |
-| `run.sh` / `run.desktop` | запуск (без изменений / пересоздать при переносе) |
-| `README.md` | единый источник данных о проекте (этот файл) |
+- `Kod.py` + `core/` + `memory/` + `storage/` — агент дней 11–15 без регрессии, плюс
+  каталог инструментов, tool-use и RAG.
+- `core/tools.py` — внутренняя модель: ToolDescriptor, ToolCallRequest, ToolExecutionResult,
+  ToolExecutionState, ToolProvider, ToolCatalogSnapshot.
+- `core/tool_registry.py` — ToolRegistry: каталогизация, атомарный snapshot, refresh.
+- `core/tool_policy.py` — ToolPolicy: проверки вызова (enabled, схема, стадия, инварианты,
+  подтверждение).
+- `core/tool_executor.py` — ToolExecutor: policy → вызов → аудит.
+- `core/tool_routing.py` и `core/tool_pipeline.py` — выбор инструмента и пайплайн из
+  инструментов.
+- `integrations/mcp/*` — MCP-слой: config, transport (stdio + HTTP + fake), client, gateway,
+  provider, demo_server, scheduler_server, pipeline_server.
+- `integrations/scheduler/*` — ядро планировщика (на stdlib): models, store, runner,
+  aggregator.
+- `rag/*` — RAG-модуль: config, corpus, chunking, embedding, index, retrieval, rerank,
+  rewrite, cache, grounding, eval, compare, sources, citations, verify, service.
+- `core/model_registry.py` + `models.json` — реестр моделей (Ревизия 8): провайдеры,
+  параметры, профили.
+- `core/llm_client.py` — клиенты LLM: `OpenAICompatClient` (LM Studio), `OllamaClient`,
+  RouterAI.
+- `core/subagents.py` — субагенты: запуск отдельной сессии, таймаут, лог с подписью модели.
+- `core/profile_router.py` и `core/resources.py` — профили параметров и замеры ресурсов
+  (Ревизия 8).
+- `serve.py` — фасад: HTTP-вход агента на хосте (`127.0.0.1:8090`), `/ask` и `/models`.
+- `gateway/*` — веб-шлюз на VPS: `app.py` (чат, прокси), `users.py` (регистрация),
+  `questions.py` (интервью), `config.py`, `templates/`.
+- `dev/vps/*` — инфраструктура доступа: скрипты деплоя, `ssh_config.snippet`,
+  `README_gateway.md`.
+- `users/<id>/integrations/mcp/{servers,catalog}.json` — конфиг серверов и снимок каталога
+  (через Store).
+- `users/<id>/tasks/<task>/tool_audit.jsonl` — история вызовов инструментов (через Store).
+- `run.sh` и `run.desktop` — запуск (без изменений / пересоздать при переносе).
+- `README.md` — единый источник данных о проекте (этот файл).
 
 ### Служебные артефакты (процесс)
 
-| Артефакт | Назначение |
-|---|---|
-| `dev/Проверка.md` | чек-лист приёмки: 39 критериев + три сценария дня 20 |
-| `dev/migr_plan.md` + `migr_plan_*.md` | план-эталон и рабочие планы миграции |
-| `dev/migr_log.md` | журнал миграции + итоги ревизий |
-| `dev/tests_debug/*` | L2 (+`test_mcp.py`, `test_rag_*.py`), L3, L4 (+сценарии), гейт 43/43 |
-| `dev/logs_reports/stages/*` | транскрипты живых прогонов |
+- `dev/Проверка.md` — чек-лист приёмки: 48 критериев Ревизии 8.
+- `dev/migr_plan.md` и `migr_plan_*.md` — план-эталон и рабочие планы миграции.
+- `dev/migr_log.md` — журнал миграции и итоги ревизий.
+- `dev/tests_debug/*` — L2 (+9 новых модулей R8), L3, L4 (+6 сценариев), гейт 58/58.
+- `dev/logs_reports/stages/*` — транскрипты живых прогонов.
 
 ---
 
@@ -1386,6 +1809,22 @@ AI_9/dev/
    сервер + реальный LLM), запись итога в `dev/migr_log.md`, предложение коммита (коммит —
    только по явной команде пользователя).
 
+**Ревизия 8 (локальные LLM и доступ к агенту):**
+0. **Реестр моделей** — `core/model_registry.py` + `models.json` (add/remove/switch/list);
+   `--model-list` / `--model <id>` / `--model-profile <name>`; подпись модели в баннере;
+   без `--model` промпт байт-в-байт прежний.
+1. **Локальная генерация** — `--local-gen` переключает модель агента на локальную ⇒
+   генератор RAG локальный; `--embed-provider` / `--embed-model` / `--embed-url` настраивают
+   эмбеддинги; `--local-template` — строгий prompt-шаблон.
+2. **Сравнение генераторов** — `--rag-gen-compare` + `--gen-modes` + `--gen-profile` +
+   `--repeat` + `--gen-report` + `--gen-resources` (три оси: качество, скорость, стоимость).
+3. **Субагенты** — `--subagent-run` / `--subagent-service` (отдельная сессия, лог с подписью).
+4. **Одношаговый режим** — `--oneshot` (один обмен → ответ → выход).
+5. **Фасад** — `serve.py` (HTTP-вход на хосте, `127.0.0.1:8090`, только localhost).
+6. **Шлюз** — `gateway.app` (веб-вход на VPS, порт `8080`, регистрация, лимит 6/мин,
+   прокси к фасаду через SSH reverse tunnel).
+7. **Финал** — прогон всех проверок (L1→L2→L3→L4→гейт), приёмка, живой прогон, запись итога.
+
 ---
 
 ## Риски и откат
@@ -1403,6 +1842,17 @@ AI_9/dev/
   `users/` не затрагивается (проверяется идемпотентным гейтом).
 - **Недетерминированность LLM** — детерминированный тестовый контур на `MockClient` +
   `FakeMCPTransport`; живой LLM — только приёмка.
+- **Зависимость от LM Studio (Ревизия 8)** — при недоступности `127.0.0.1:1234` понятная
+  ошибка «Сервис временно недоступен» (LM Studio мог «заснуть»), REPL жив; откат —
+  `--model routerai:...` (облако). Юниты и гейт от LM Studio не зависят (`FakeTransport`).
+- **Регрессия при переключении модели (Ревизия 8)** — без `--model` промпт строится
+  байт-в-байт как в Ревизии 7 (проверяется тестом равенства промпта); реестр моделей —
+  только добавление слоя, контракты `LLMClient` не тронуты.
+- **Публичный доступ (Ревизия 8)** — фасад слушает **только** `127.0.0.1:8090` и наружу не
+  выходит; извне доступен только шлюз (`8080`) с аутентификацией и лимитом 6 запросов/мин;
+  SSH reverse tunnel инициируется хостом (входящих правил фаервола для хоста не создаётся).
+- **Секреты в конфигурации (Ревизия 8)** — `models.json`, `gateway.json` и `.env` не
+  содержат ключей (ключ только в `.env`, в `.gitignore`); проверяется отдельной проверкой гейта.
 
 ---
 
@@ -1472,6 +1922,16 @@ AI_9/dev/
   → `MCPToolProvider` (нормализация во внутреннюю `ToolDescriptor`) → `ToolRegistry`
   (каталог + атомарный snapshot + персистентность через `Store`) → `ToolExecutor`
   (policy + аудит) → LLM tool-use.
+- **Ревизия 8 — локальные LLM и доступ к агенту**: реестр моделей (`models.json` +
+  `core/model_registry.py`); `--model-list` / `--model <id>` / `--model-profile <name>`;
+  `--local-gen` переключает генератор на локальную модель; `--embed-provider` /
+  `--embed-model` / `--embed-url` настраивают эмбеддинги; `--local-template` — строгий
+  prompt-шаблон; `--oneshot` — один обмен → ответ → выход; субагенты (`--subagent-run`)
+  с логированием; `serve.py` — фасад (HTTP, `127.0.0.1:8090`); `gateway.app` — веб-шлюз
+  на VPS (порт `8080`, регистрация, лимит 6/мин, прокси к фасаду через SSH reverse tunnel);
+  сравнение генераторов (`--rag-gen-compare`), профили параметров, замеры ресурсов.
+  (каталог + атомарный snapshot + персистентность через `Store`) → `ToolExecutor`
+  (policy + аудит) → LLM tool-use.
 - **Пять «кубиков» дней 11–15 без регрессии**: память, профили, инварианты, строгая
   машина состояний, LLM-клиент — контракты не тронуты; MCP и RAG выключены по умолчанию.
 - **Инструмент ≠ переход**: `TaskStage` (8 стадий) не меняется от вызовов MCP/RAG;
@@ -1480,8 +1940,8 @@ AI_9/dev/
   модель MCP не протекает в `core`; `MCPGateway` не знает о стадиях/профилях/памяти.
 - **Деградация, не падение**: недоступный сервер → FAILED/DEGRADED, REPL жив;
   недоступная Ollama → `HashingEmbedder`.
-- **Проверяемость**: L1 OK / L2 290 OK / L3 SMOKE OK / L4 SCENARIO OK, гейт **43/43**,
-  приёмка **39 критериев** — без живого ключа и сети; живой прогон (реальный HTTP-сервер +
+- **Проверяемость**: L1 OK / L2 412 OK / L3 SMOKE OK / L4 SCENARIO OK, гейт **58/58**,
+  приёмка **48 критериев** — без живого ключа и сети; живой прогон (реальный HTTP-сервер +
   реальный LLM) — отдельно.
 - **Заделы с зарезервированными местами**: `ToolMemoryPolicy`, `ToolPromptPolicy`/resources,
   параллелизм read-only тулов, local-провider, полный async core, сравнение токен-флоу
