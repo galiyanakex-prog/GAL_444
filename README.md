@@ -1526,17 +1526,17 @@ retry на HTTP 429 с задержками 2 → 4 → 8 сек, таймаут
   schema_version=1); **MCP не трогает состояние** (TaskStage не изменился,
   transition_log пуст); **MCP off по умолчанию**; конфиг (дефолт/битый/неизвестные
   ключи); LLM tool-use (парсеры, агентный цикл, блок `[tools]`);
-- `unit/test_rag_*.py` — интеграция (16), grounding (18), cache (15), rerank (10),
+- `unit/test_rag_*.py` — интеграция (18), grounding (18), cache (15), rerank (10),
   verify (10), working_memory (9), service;
 - `unit/test_llm_local.py` — `OpenAICompatClient`/`OllamaClient` (12 тестов);
 - `unit/test_model_switch.py` — `/model` + отображение модели (9 тестов);
 - `unit/test_subagents.py` — запуск/таймаут/безопасность (10 тестов);
-- `unit/test_rag_local_gen.py` — локальная генерация в RAG (14 тестов);
+- `unit/test_rag_local_gen.py` — локальная генерация в RAG (19 тестов);
 - `unit/test_rag_gen_compare.py` — сравнение генераторов (10 тестов);
 - `unit/test_llm_optimize.py` — профили + prompt-шаблон (15 тестов);
 - `unit/test_llm_resources.py` — замеры ресурсов (12 тестов);
-- `unit/test_facade.py` — фасад: маршруты, очередь, подпись (14 тестов);
-- `unit/test_gateway.py` — вход, регистрация, лимиты, прокси, вопросы интервью (11 тестов);
+- `unit/test_facade.py` — фасад: маршруты, очередь, подпись (15 тестов);
+- `unit/test_gateway.py` — вход, регистрация, лимиты, прокси, вопросы интервью (20 тестов);
 - L4 сценарии — проверки внутри `scenario.py`: `scenario_mcp_discovery`,
   `scenario_llm_tool_use`, `scenario_tool_denied`, `scenario_multiserver_flow` + базовые.
   Отдельно в `scenario/` лежат **9 md-файлов сценариев ручной демонстрации**
@@ -1675,7 +1675,7 @@ retry на HTTP 429 с задержками 2 → 4 → 8 сек, таймаут
   Что видно: эмбеддинги из Ollama, генерация из LM Studio, без интернета.
 - **Сравнение генераторов.** Как:
   `python Kod.py --rag-gen-compare --gen-modes cloud,local --repeat 3`.
-  Что видно: отчёт — три оси (качество, скорость, стоимость).
+  Что видно: отчёт — три оси (качество, скорость, стабильность).
 - **Профиль параметров.** Как: `python Kod.py --model-profile rag-strict`.
   Что видно: профиль в теле запроса (temperature, max_tokens, context_window).
 - **Фасад (HTTP-вход).** Как: `python serve.py` → `curl http://127.0.0.1:8090/ask`.
@@ -1695,7 +1695,7 @@ retry на HTTP 429 с задержками 2 → 4 → 8 сек, таймаут
 AI_9/dev/
 ├── migr_plan.md                  # план-эталон миграции
 ├── migr_plan_0.md … migr_plan_12.md  # исполняемые планы этапов (конец этапа — гейт в следующий)
-├── migr_review.md                # план проверки расхождений (Ш1–Ш14)
+├── review/                       # ревью документации (migr_review.md + рабочие планы 0–9)
 ├── migr_log.md                   # журнал миграции «было → стало → проверка → статус»
 ├── Проверка.md                   # чек-лист приёмки (48 критериев Ревизии 8)
 ├── old_vers/                     # история прошлых ревизий (1…8)
@@ -1889,7 +1889,7 @@ AI_9/dev/
    генератор RAG локальный; `--embed-provider` / `--embed-model` / `--embed-url` настраивают
    эмбеддинги; `--local-template` — строгий prompt-шаблон.
 2. **Сравнение генераторов** — `--rag-gen-compare` + `--gen-modes` + `--gen-profile` +
-   `--repeat` + `--gen-report` + `--gen-resources` (три оси: качество, скорость, стоимость).
+   `--repeat` + `--gen-report` + `--gen-resources` (три оси: качество, скорость, стабильность).
 3. **Субагенты** — `--subagent-run` / `--subagent-service` (отдельная сессия, лог с подписью).
 4. **Одношаговый режим** — `--oneshot` (один обмен → ответ → выход).
 5. **Фасад** — `serve.py` (HTTP-вход на хосте, `127.0.0.1:8090`, только localhost).
@@ -1964,7 +1964,8 @@ AI_9/dev/
 
 - каталоги `dev/tests_debug/fixtures/` и `smoke/` созданы каркасом и остались пустыми;
   в `.tmp/` накапливаются каталоги прошлых прогонов (в `.gitignore`);
-- `dev/meta_promt/` в этой копии содержит только `МЕТА-ПРОМТ_den_N.md` и `PROMT_otch.md`;
+- `dev/meta_promt/` в этой копии содержит `МЕТА-ПРОМТ_den_N.md`, `PROMT_otch.md`
+  и `screen-ASKII.txt`;
 - изменения миграции не закоммичены (коммит — только по явной команде пользователя).
 
 ---
@@ -2002,8 +2003,6 @@ AI_9/dev/
   с логированием; `serve.py` — фасад (HTTP, `127.0.0.1:8090`); `gateway.app` — веб-шлюз
   на VPS (порт `8080`, регистрация, лимит 6/мин, прокси к фасаду через SSH reverse tunnel);
   сравнение генераторов (`--rag-gen-compare`), профили параметров, замеры ресурсов.
-  (каталог + атомарный snapshot + персистентность через `Store`) → `ToolExecutor`
-  (policy + аудит) → LLM tool-use.
 - **Пять «кубиков» дней 11–15 без регрессии**: память, профили, инварианты, строгая
   машина состояний, LLM-клиент — контракты не тронуты; MCP и RAG выключены по умолчанию.
 - **Инструмент ≠ переход**: `TaskStage` (8 стадий) не меняется от вызовов MCP/RAG;
