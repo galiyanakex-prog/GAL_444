@@ -408,6 +408,15 @@ runner, aggregator — ядро планировщика на stdlib). SDK им�
 AI_9/
 ├── Kod.py                       # точка входа: DI-композиция (+ mcp_enabled, RagService) + REPL
 │                                #   (+ /mcp…, /rag…, --mcp-probe, run_mcp_probe)
+├── serve.py                     # фасад: HTTP-вход агента (Flask, 127.0.0.1:8090)
+├── models.json                  # реестр моделей и профилей (Ревизия 8)
+├── gateway/                     # веб-шлюз на VPS (Flask)
+│   ├── app.py                   # вход/регистрация/интервью/чат, лимиты, прокси на фасад
+│   ├── config.py                # конфиг шлюза (gateway.json + env-секрет)
+│   ├── questions.py             # снапшот вопросов интервью (сверка отпечатка)
+│   ├── sync_questions.py        # обновление questions.json из канона
+│   ├── users.py                 # регистрация/вход (пароли только хэшами)
+│   └── templates/               # login/register/interview/chat.html
 ├── core/                        # ядро агентности
 │   ├── agent.py                 # оркестратор: + mcp_gateway/tool_registry/tool_executor/tool_policy
 │   │                            #   (None при MCP off) + агентный tool-use цикл (_respond_with_tools)
@@ -419,6 +428,9 @@ AI_9/
 │   ├── state_machine.py         # строгая машина состояний (MCP/RAG её не трогают)
 │   ├── invariants.py            # Invariant + ConstraintSet + InvariantChecker + ProposedAction
 │   │                            #   (MCP-поля action_type/tool_name/arguments; правило tool.deny.*)
+│   ├── model_registry.py        # ModelRegistry + ModelSpec: реестр моделей (Ревизия 8)
+│   ├── resources.py             # замеры ресурсов хоста (Ревизия 8)
+│   ├── subagents.py             # SubagentRunner: дочерние CLI-сессии (Ревизия 8)
 │   ├── tools.py                 # внутренняя модель инструментов: ToolDescriptor + ToolCallRequest +
 │   │                            #   ToolExecutionResult + ToolExecutionState + ToolProvider (ABC) +
 │   │                            #   ToolCatalogSnapshot (контракты без MCP SDK и без сети)
@@ -436,6 +448,8 @@ AI_9/
 │   │   │                        #   trust_level, allowed/denied_tools, timeout, max_result_bytes)
 │   │   │                        #   + load_servers_config (дефолты: time + weather + scheduler +
 │   │   │                        #   pipeline + demo; битый файл не роняет)
+│   │   ├── auth.py              # серверная проверка токена MCP-серверов (Bearer, env)
+│   │   ├── time_server.py       # MCP-сервер времени (HTTP :8000)
 │   │   ├── transport.py         # MCPTransport (ABC) + StdioMCPTransport + HttpMCPTransport
 │   │   │                        #   (Streamable HTTP, mcp SDK) + FakeMCPTransport; make_transport
 │   │   ├── client.py            # MCPClient: initialize / list_tools / call_tool
