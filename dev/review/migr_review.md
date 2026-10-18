@@ -398,7 +398,7 @@ README.md ← окончательное описание (постоянный 
      существуют ли на диске.
   3. Ссылки на сценарии (`scen_1.md`, `scen_rag.md`, `scen_dialog_A.md`,
      `scen_dialog_B.md`, `scen_local_llm.md`, `scen_rag_local.md`,
-     `scen_optimize.md`, `scen_rag_gen_compare.md`, `scen_access.md`) —
+     `scen_optimize.md`, `scen_multiserver_flow.md`, `scen_access.md`) —
      существуют ли на диске.
   4. Ссылки на `check_acceptance.sh` — существует ли, число проверок.
   5. Ссылки на `unit_runner.py`, `smoke.py`, `scenario.py`, `dialog_runner.py` —
