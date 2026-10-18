@@ -1090,3 +1090,48 @@
 - Перечитывание migr_review.md: ✅ (2026-10-18, редакция v1.1, 609 строк)
 - Гейт 3→4: ✅ (ND/ в дереве и карте; agents.md в дереве и карте; time_server/auth.py
   упомянуты; .ssh/ не описан; все пути существуют; запись сделана; мастер-план перечитан).
+
+## Ревью Этап 4 — Обновление «Карты артефактов» (цель: R4)
+- Статус: ✅ завершён (исполнение по `dev/review/migr_review_4.md`, шаги 4.1–4.7).
+- Было: «Карта артефактов» (раздел «Карта артефактов»):
+  - «Рабочие артефакты» — перечень `integrations/mcp/*` без `time_server`/`auth`;
+    `gateway/*` без `questions.json`/`sync_questions.py`/`gateway.json`;
+    `dev/vps/*` без `units/`/`evidence/`/`services.list`/`sshd_gateway.snippet`;
+    `ND/models/*_params.md` — строка отсутствовала;
+  - «Служебные артефакты» — `dev/tests_debug/*` с формулировкой «+6 сценариев»;
+    строки `dev/review/*`, `agents.md`, `ND/tasks`, `ND/other` — отсутствовали.
+- Расхождения плана с фактическим состоянием (учтены): `serve.py`, `gateway/*`,
+  `models.json`, `core/model_registry.py`, `core/subagents.py`, `core/resources.py`
+  уже были в карте после этапов 1–3 (`ND/`, `agents.md` в «Служебных»); гейт фактически
+  = **58** (`grep -c '^check '` → 58, метка `# 58:`), а не 59 — README верен;
+  расхождения `migr_2_plan.md` в «Служебных артефактах» нет (был устаревший в дереве
+  `dev/`, удалён на этапе 2).
+- Стало (README.md):
+  - **ШАГ 4.1:** `integrations/mcp/*` дополнен `time_server`, `auth` (11 модулей);
+  - **ШАГ 4.2:** `gateway/*` раскрыт — `questions.py` + `questions.json`,
+    `sync_questions.py`, `config.py` + `gateway.json`, `templates/` (login, register,
+    interview, chat);
+  - **ШАГ 4.3:** `dev/vps/*` раскрыт — скрипты деплоя, `services.list`,
+    `ssh_config.snippet`, `sshd_gateway.snippet`, `units/` (5 systemd-юнитов),
+    `evidence/`, `README_vps.md`, `README_gateway.md`;
+  - **ШАГ 4.4:** `ND/models/*_params.md` добавлен в «Рабочие артефакты» (перед `run.sh`);
+  - **ШАГ 4.5:** «Служебные артефакты» — добавлены `dev/review/*`, `agents.md`;
+    уточнено `dev/migr_log.md` (+ журнал ревью); `dev/tests_debug/*` — «L2 (42 модуля,
+    +9 новых R8), L3, L4 (9 сценариев), гейт 58/58»; `stages/` — «56 файлов».
+- Фактические счётчики: README 1997 → **2004 строки** (`git diff --numstat README.md`
+  = `16 insertions, 9 deletions`).
+- **ШАГ 4.6 (проверка):** 10/10 путей из карты существуют на диске — `OK` ×10
+  (`integrations/mcp/time_server.py`, `auth.py`, `gateway/sync_questions.py`,
+  `questions.json`, `gateway.json`, `dev/vps/units`, `dev/vps/evidence`,
+  `dev/review/migr_review.md`, `ND/models`, `agents.md`); устаревших ссылок
+  (`migr_2_plan`, `README_3`, `README_4`, `scen_model_switch`) в README — **0**.
+  Сверено с диском: гейт = 58 (`check_acceptance.sh`), unit = 42, scenario = 9,
+  stages = 56; `ND/models/*_params.md` в карте — 1 упоминание (без дублей).
+- **ШАГ 4.7:** `migr_review.md` перечитан целиком (редакция v1.1).
+- Артефакты: `README.md` (карта артефактов); `dev/migr_log.md` (настоящая запись).
+- Коммит: предложен текст (выполняет оператор):
+  `docs(readme): обновить «Карту артефактов» — дополнить mcp/ (time_server, auth), gateway/ (sync_questions, questions.json, gateway.json), dev/vps/ (units, evidence), добавить ND/models в рабочие, agents.md и dev/review/ в служебные`.
+- Перечитывание migr_review.md: ✅ (2026-10-18, редакция v1.1)
+- Гейт 4→5: ✅ (mcp=11; gateway — 6 py + 2 json + templates; units/ и evidence/
+  упомянуты; ND/ в карте; agents.md и dev/review/ в служебных; все пути существуют;
+  устаревших ссылок нет; запись сделана; мастер-план перечитан).

@@ -1798,7 +1798,7 @@ AI_9/dev/
 - `core/tool_routing.py` и `core/tool_pipeline.py` — выбор инструмента и пайплайн из
   инструментов.
 - `integrations/mcp/*` — MCP-слой: config, transport (stdio + HTTP + fake), client, gateway,
-  provider, demo_server, scheduler_server, pipeline_server.
+  provider, demo_server, scheduler_server, pipeline_server, time_server, auth.
 - `integrations/scheduler/*` — ядро планировщика (на stdlib): models, store, runner,
   aggregator.
 - `rag/*` — RAG-модуль: config, corpus, chunking, embedding, index, retrieval, rerank,
@@ -1812,12 +1812,18 @@ AI_9/dev/
   (Ревизия 8).
 - `serve.py` — фасад: HTTP-вход агента на хосте (`127.0.0.1:8090`), `/ask` и `/models`.
 - `gateway/*` — веб-шлюз на VPS: `app.py` (чат, прокси), `users.py` (регистрация),
-  `questions.py` (интервью), `config.py`, `templates/`.
-- `dev/vps/*` — инфраструктура доступа: скрипты деплоя, `ssh_config.snippet`,
-  `README_gateway.md`.
+  `questions.py` + `questions.json` (интервью, единый источник истины),
+  `sync_questions.py` (обновление снапшота вопросов), `config.py` + `gateway.json`
+  (лимиты, адрес фасада), `templates/` (login, register, interview, chat).
+- `dev/vps/*` — инфраструктура доступа: скрипты деплоя (`deploy_services.sh`,
+  `mcp_vps.sh`), `services.list`, `ssh_config.snippet`, `sshd_gateway.snippet`,
+  `units/` (5 systemd-юнитов: шлюз, туннель, 3 MCP-сервера), `evidence/`
+  (артефакты проверки MCP на VPS), `README_vps.md`, `README_gateway.md`.
 - `users/<id>/integrations/mcp/{servers,catalog}.json` — конфиг серверов и снимок каталога
   (через Store).
 - `users/<id>/tasks/<task>/tool_audit.jsonl` — история вызовов инструментов (через Store).
+- `ND/models/*_params.md` — справки по моделям: окно контекста, параметры, доступные
+  кванты, требования по RAM (боевая — `Qwen2.5-Coder-3B-…-abliterated_params.md`).
 - `run.sh` и `run.desktop` — запуск (без изменений / пересоздать при переносе).
 - `README.md` — единый источник данных о проекте (этот файл).
 
@@ -1825,13 +1831,14 @@ AI_9/dev/
 
 - `dev/Проверка.md` — чек-лист приёмки: 48 критериев Ревизии 8.
 - `dev/migr_plan.md` и `migr_plan_*.md` — план-эталон и рабочие планы миграции.
-- `dev/migr_log.md` — журнал миграции и итоги ревизий.
-- `dev/tests_debug/*` — L2 (+9 новых модулей R8), L3, L4 (+6 сценариев), гейт 58/58.
-- `dev/logs_reports/stages/*` — транскрипты живых прогонов.
-- `ND/models/*_params.md` — справки по моделям (окно контекста, параметры, кванты, RAM).
+- `dev/migr_log.md` — журнал миграции и итоги ревизий (+ журнал ревью документации).
+- `dev/review/migr_review.md` и `migr_review_*.md` — мастер-план и рабочие планы
+  ревью документации (приведение README к реальной картине проекта).
+- `dev/tests_debug/*` — L2 (42 модуля, +9 новых R8), L3, L4 (9 сценариев), гейт 58/58.
+- `dev/logs_reports/stages/*` — транскрипты живых прогонов (56 файлов).
+- `agents.md` — краткая памятка агенту (вспомогательный документ, 20 строк).
 - `ND/tasks/n_1 … n_7` — задания куратора по неделям (источник требований).
 - `ND/other/tunel_plan.md` — наработки по туннелю (учтены в `dev/vps/`).
-- `agents.md` — краткая памятка агенту (вспомогательный документ, 20 строк).
 
 ---
 
