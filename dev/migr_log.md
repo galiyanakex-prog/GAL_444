@@ -1024,3 +1024,41 @@
 - Перечитывание migr_review.md: ✅ (2026-10-18 18:27, редакция v1.1, 609 строк)
 - Гейт 1→2: ✅ (core=16; `serve.py`/`models.json`/`gateway/` в дереве; mcp=11;
   все файлы из нового дерева существуют; запись сделана; мастер-план перечитан).
+## Ревью Этап 2 — Обновление «Дерева `dev/`» (цель: R2)
+- Статус: ✅ завершён (исполнение по `dev/review/migr_review_2.md`, шаги 2.1–2.9).
+- Было: «Дерево `dev/`» (раздел «Служебное пространство `dev/`») — снимок Ревизии 7:
+  заявлены несуществующие `migr_2_plan.md`, `migr_2_plan_0.md … migr_2_plan_9.md`
+  (Ревизия 7.1) и `scen_model_switch.md`; блоки `unit/` и `scenario/` неполны;
+  отсутствовали `scen_multiserver_flow.md`, 9 unit-тестов R8, `vps/units/` (5 юнитов),
+  `vps/evidence/`, `fixtures/`.
+- Стало (README.md): дерево `dev/` приведено к факту диска.
+  - **ШАГ 2.1:** удалены строки `migr_2_plan.md` и `migr_2_plan_0.md … migr_2_plan_9.md`
+    (файлов нет на диске — `ls dev/migr_2_plan*.md` → «Нет такого файла»);
+  - **ШАГ 2.2:** удалена строка `scen_model_switch.md` (файла нет);
+  - **ШАГ 2.3:** добавлен `scen_multiserver_flow.md` (мультисерверный поток, Ревизия 7);
+  - **ШАГ 2.4:** блок `unit/` конкретизирован — «42 модуля test_*.py (канонический
+    раннер — unit_runner.py)» + подблок «Ревизия 8 (9 модулей)»: `test_llm_local.py`,
+    `test_model_switch.py`, `test_subagents.py`, `test_rag_local_gen.py`,
+    `test_rag_gen_compare.py`, `test_llm_optimize.py`, `test_llm_resources.py`,
+    `test_facade.py`, `test_gateway.py`;
+  - **ШАГ 2.5:** строка `vps/` раскрыта — 7 файлов (`deploy_services.sh`, `mcp_vps.sh`,
+    `services.list`, `ssh_config.snippet`, `sshd_gateway.snippet`, `README_vps.md`,
+    `README_gateway.md`), `units/` (5 systemd-юнитов: `ai9-gateway.service`,
+    `ai9-tunnel.service`, `mcp-time-server.service`, `mcp-scheduler-server.service`,
+    `mcp-pipeline-server.service`), `evidence/` (5 probe/call);
+  - **ШАГ 2.6:** добавлен `fixtures/` (пусто — заполняется по мере надобности);
+  - **ШАГ 2.7:** в описании `scenario/` указано фактическое число — **9 сценариев**
+    (было заявлено 7, из них 1 несуществующий); `logs_reports/` — «stages/ (56 файлов)».
+- Фактические счётчики: unit=42, scenario=9, stages=56, fixtures=0; README
+  1962 → **1986 строк** (`git diff --stat README.md` = `32 insertions, 9 deletions`).
+- **ШАГ 2.8 (проверка):** 15 путей из нового дерева `dev/` (9 unit R8 +
+  `scen_multiserver_flow.md` + 5 `vps/units/*.service`) — `OK` ×15; удалённые
+  `migr_2_plan.md` и `scen_model_switch.md` — `OK (absent)`; `dev/migr_2_plan*.md` — нет.
+- Артефакты: `README.md` (дерево `dev/`); `dev/migr_log.md` (настоящая запись).
+- Коммит: предложен текст (выполняет оператор):
+  `docs(readme): обновить «Дерево dev/» — удалить несуществующие migr_2_plan* и scen_model_switch.md, добавить 9 unit-тестов R8, scen_multiserver_flow.md, vps/units/ (5 юнитов), vps/evidence/, fixtures/`.
+- Перечитывание migr_review.md: ✅ (2026-10-18, редакция v1.1, 609 строк)
+- Гейт 2→3: ✅ (migr_2_plan* и scen_model_switch.md удалены; scen_multiserver_flow.md
+  добавлен; 9 unit-тестов R8 добавлены; vps/units/ и vps/evidence/ раскрыты; fixtures/
+  добавлен; все файлы нового дерева существуют; удалённые отсутствуют; запись сделана;
+  мастер-план перечитан).

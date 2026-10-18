@@ -1671,8 +1671,6 @@ AI_9/dev/
 ├── migr_plan.md                  # план-эталон миграции
 ├── migr_plan_0.md … migr_plan_12.md  # исполняемые планы этапов (конец этапа — гейт в следующий)
 ├── migr_review.md                # план проверки расхождений (Ш1–Ш14)
-├── migr_2_plan.md                # мастер-план Ревизии 7.1 (актуализация)
-├── migr_2_plan_0.md … migr_2_plan_9.md  # рабочие планы Ревизии 7.1
 ├── migr_log.md                   # журнал миграции «было → стало → проверка → статус»
 ├── Проверка.md                   # чек-лист приёмки (48 критериев Ревизии 8)
 ├── old_vers/                     # история прошлых ревизий (1…8)
@@ -1683,11 +1681,21 @@ AI_9/dev/
 │   ├── smoke.py                  # L3-смоук (+ MCP-прогон + tool-use)
 │   ├── scenario.py               # L4-сценарии (+ mcp_discovery, llm_tool_use, tool_denied, multiserver_flow)
 │   ├── dialog_runner.py          # прогон 2 длинных диалоговых сценариев (часть 4)
-│   ├── unit/
+│   ├── unit/                     # 42 модуля test_*.py (канонический раннер — unit_runner.py)
 │   │   ├── … прежние модули (MCP/RAG off)
 │   │   ├── test_mcp.py           # контракты + реестр + gateway + call_tool + policy + tool-use
-│   │   └── test_rag_*.py         # integration / grounding / cache / rerank / verify / working_memory
-│   ├── scenario/
+│   │   ├── test_rag_*.py         # integration / grounding / cache / rerank / verify / working_memory
+│   │   └── Ревизия 8 (9 модулей):
+│   │       ├── test_llm_local.py         # локальные клиенты + ModelRegistry
+│   │       ├── test_model_switch.py      # /model, отображение, регрессия
+│   │       ├── test_subagents.py         # запуск/таймаут/безопасность
+│   │       ├── test_rag_local_gen.py     # локальная генерация в RAG
+│   │       ├── test_rag_gen_compare.py   # сравнение генераторов
+│   │       ├── test_llm_optimize.py      # профили, шаблон, метрики
+│   │       ├── test_llm_resources.py     # замеры ресурсов
+│   │       ├── test_facade.py            # фасад: маршруты, очередь, подпись
+│   │       └── test_gateway.py           # вход, регистрация, лимиты, прокси
+│   ├── scenario/                 # 9 сценариев ручной демонстрации
 │   │   ├── scen_1.md             # сценарий ручной демонстрации MCP
 │   │   ├── scen_rag.md           # сценарий ручной демонстрации RAG
 │   │   ├── scen_dialog_A.md      # длинный диалог A (12 сообщений, RAG-модуль)
@@ -1696,11 +1704,26 @@ AI_9/dev/
 │   │   ├── scen_rag_local.md     # полностью локальный RAG (Ревизия 8)
 │   │   ├── scen_optimize.md      # профили параметров + prompt-шаблон (Ревизия 8)
 │   │   ├── scen_rag_gen_compare.md # сравнение генераторов (Ревизия 8)
-│   │   ├── scen_access.md        # фасад + шлюз + туннель (Ревизия 8)
-│   │   └── scen_model_switch.md  # переключение моделей (Ревизия 8)
+│   │   ├── scen_multiserver_flow.md # мультисерверный поток (Ревизия 7)
+│   │   └── scen_access.md        # фасад + шлюз + туннель (Ревизия 8)
+│   ├── fixtures/                 # фикстуры (пусто — заполняется по мере надобности)
 │   └── .tmp/                     # единственное место прогонов (.gitignore)
-├── logs_reports/                 # stages/ + errors/ + archive/
-└── vps/                          # инфраструктурный контур VPS (units/, evidence/, скрипты)
+├── logs_reports/                 # stages/ (56 файлов) + errors/ + archive/
+└── vps/                          # инфраструктурный контур VPS
+    ├── deploy_services.sh        # выкатка сервисов
+    ├── mcp_vps.sh                # управление MCP на VPS
+    ├── services.list             # список сервисов
+    ├── ssh_config.snippet        # конфиг SSH-туннеля (хост)
+    ├── sshd_gateway.snippet      # справка по GatewayPorts (VPS)
+    ├── README_vps.md             # инструкция по VPS
+    ├── README_gateway.md         # инструкция по шлюзу
+    ├── units/                    # 5 systemd-юнитов:
+    │   ├── ai9-gateway.service           # шлюз на VPS (:8080)
+    │   ├── ai9-tunnel.service            # SSH reverse tunnel (хост)
+    │   ├── mcp-time-server.service       # MCP :8000
+    │   ├── mcp-scheduler-server.service  # MCP :8010
+    │   └── mcp-pipeline-server.service   # MCP :8020
+    └── evidence/                 # артефакты проверки MCP на VPS (5 probe/call)
 
 
 ### `tests_debug/` — что именно протестировать (канон задания)
