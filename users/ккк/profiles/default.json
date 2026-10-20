@@ -3,12 +3,12 @@
   "profile_id": "default",
   "name": "ккк",
   "style": {
-    "answers": "краткий"
+    "answers": ""
   },
   "constraints": {
-    "answers": "python, bash"
+    "answers": ""
   },
   "context": {
-    "answers": "программирование"
+    "answers": ""
   }
 }
