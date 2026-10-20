@@ -1,0 +1,1143 @@
+Как мне лучше настроить работу агента с файлами и директориями для создания и редактирования проектов (возможность работы с файлами и директориями отсутствует)?
+
+Лучше всего дать агенту доступ к проектам через **отдельный файловый MCP-сервер**, но не разрешать ему произвольную файловую систему. Для `den_15` правильная модель:
+
+```text
+Agent
+  ↓
+ToolExecutor
+  ↓
+FilePolicy + InvariantChecker
+  ↓
+Filesystem MCP adapter
+  ↓
+разрешённый workspace
+```
+
+При этом MCP-сервер не должен напрямую видеть `users/`, хранилище памяти, `.env`, SSH-ключи и весь домашний каталог.
+
+## Рекомендуемая модель workspace
+
+Разделите пространство агента на три области:
+
+```text
+den_n/
+├── users/
+├── workspaces/
+│   └── <user_id>/
+│       └── <project_id>/
+├── staging/
+└── exports/
+```
+
+### `workspaces/`
+
+Основные проекты пользователя:
+
+```text
+workspaces/<user_id>/<project_id>/
+```
+
+Агент может:
+
+- создавать файлы;
+- читать файлы;
+- изменять файлы;
+- создавать каталоги;
+- запускать анализ проекта;
+- формировать патчи.
+
+### `staging/`
+
+Временная область для опасных операций:
+
+```text
+staging/<task_id>/
+```
+
+Сначала агент создаёт или изменяет файлы там, после проверки пользователь подтверждает перенос в рабочий проект.
+
+### `exports/`
+
+Результаты, которые можно явно выдать пользователю:
+
+```text
+exports/<task_id>/
+```
+
+Это помогает не смешивать исходный проект, временные файлы и финальные артефакты.
+
+## Не давайте MCP доступ к `storage/`
+
+Это принципиально важно для вашей архитектуры.
+
+Файловый инструмент не должен иметь доступа к:
+
+```text
+users/<id>/profile.json
+users/<id>/profiles/
+users/<id>/long_term_memory.json
+tasks/*/task_state.json
+tasks/*/invariants.json
+sessions/
+```
+
+Иначе агент через файловый инструмент сможет обойти:
+
+- `StateMachine`;
+- `InvariantChecker`;
+- `MemoryManager`;
+- миграции `Store`;
+- журнал переходов;
+- ограничения профиля.
+
+Пути хранения `den_N` должны редактироваться только через ваши Python-классы:
+
+```text
+StateMachine → Store.save_task_state()
+MemoryManager → Store.save_memory()
+ProfileManager → Store.save_profile()
+```
+
+а не через универсальный `write_file`.
+
+## MCP Filesystem Server
+
+Для первого варианта можно подключить стандартный filesystem MCP server и передать ему только разрешённые директории. Официальный сервер поддерживает ограничение директорий через аргументы запуска или MCP Roots [1].
+
+Например, логически сервер должен получить только:
+
+```text
+/home/user/den_n/workspaces/user_1/project_a
+```
+
+или на Windows:
+
+```text
+C:\Users\User\den_n\workspaces\user_1\project_a
+```
+
+Не передавайте ему:
+
+```text
+/home/user
+```
+
+или:
+
+```text
+C:\
+```
+
+MCP Roots полезны для объявления серверу допустимых рабочих директорий, но в актуальной документации они описываются как механизм координации, а не полноценная граница безопасности; фактическая защита должна обеспечиваться правами ОС и sandboxing [2]. Поэтому Roots нужно использовать вместе с локальной проверкой путей и операционной изоляцией.
+
+## Не используйте один универсальный `write_file`
+
+Для вашего агента лучше сделать внутренние классы доступа:
+
+```python
+class WorkspaceFileService:
+    async def list_tree(self, project_id: str, path: str = "."):
+        ...
+
+    async def read_file(self, project_id: str, path: str):
+        ...
+
+    async def propose_write(
+        self,
+        project_id: str,
+        path: str,
+        content: str,
+    ):
+        ...
+
+    async def apply_write(self, change_id: str):
+        ...
+
+    async def delete_file(self, project_id: str, path: str):
+        ...
+```
+
+Снаружи это может быть MCP-инструмент, но внутри ваш агент должен обращаться не к произвольному пути, а к:
+
+```text
+project_id + относительный path
+```
+
+Например:
+
+```text
+project_id = den_n
+path = src/core/agent.py
+```
+
+А не:
+
+```text
+path = /home/user/project/src/core/agent.py
+```
+
+Абсолютный путь должен формироваться только вашим `WorkspaceResolver`.
+
+## Центральный WorkspaceResolver
+
+Создайте компонент, который единственный знает реальные пути проектов:
+
+```python
+from pathlib import Path
+
+
+class WorkspaceResolver:
+    def __init__(self, root: Path):
+        self.root = root.resolve()
+
+    def project_root(self, user_id: str, project_id: str) -> Path:
+        return (
+            self.root
+            / "workspaces"
+            / self._safe_part(user_id)
+            / self._safe_part(project_id)
+        ).resolve()
+
+    def resolve_relative(
+        self,
+        user_id: str,
+        project_id: str,
+        relative_path: str,
+    ) -> Path:
+        root = self.project_root(user_id, project_id)
+        candidate = (root / relative_path).resolve()
+
+        if candidate != root and root not in candidate.parents:
+            raise PermissionError("Path is outside project workspace")
+
+        return candidate
+
+    @staticmethod
+    def _safe_part(value: str) -> str:
+        if not value or value in {".", ".."}:
+            raise ValueError("Invalid path component")
+
+        if "/" in value or "\\" in value:
+            raise ValueError("Path separators are not allowed")
+
+        return value
+```
+
+Проверка `resolve()` обязательна. Простая проверка строкой вроде:
+
+```python
+if "../" in path:
+```
+
+недостаточна.
+
+Нужно учитывать:
+
+- `..`;
+- символические ссылки;
+- абсолютные пути;
+- разные разделители;
+- регистр букв в Windows;
+- пути, которые ещё не существуют;
+- переходы через symlink.
+
+## Не давайте агенту права через симлинки
+
+Даже если путь формально находится внутри проекта, символическая ссылка может вести наружу:
+
+```text
+project/
+└── secrets -> /home/user/.ssh
+```
+
+Для записи и чтения нужно проверять не только сам путь, но и реальные существующие родительские директории.
+
+Практическое правило:
+
+```text
+symlink внутри workspace → запрещён по умолчанию
+```
+
+Либо разрешайте его только после отдельной настройки проекта.
+
+## Модель операций: чтение безопаснее записи
+
+Разделите действия по риску.
+
+| Операция | Риск | Режим |
+|---|---:|---|
+| Получить список файлов | низкий | разрешить |
+| Прочитать файл | низкий/средний | разрешить с лимитами |
+| Создать каталог | средний | разрешить в workspace |
+| Создать новый файл | средний | подтверждение или staging |
+| Изменить существующий файл | высокий | diff + подтверждение |
+| Удалить файл | высокий | только подтверждение |
+| Переименовать каталог | высокий | только подтверждение |
+| Изменить конфигурацию | высокий | отдельная политика |
+| Запустить shell-команду | критический | отдельный sandbox |
+
+Не стоит сразу давать агенту shell-доступ. Работа с файлами и выполнение команд — разные уровни риска.
+
+## Основной рабочий цикл: не «записать», а «предложить изменение»
+
+Для создания и редактирования проектов я рекомендую не выполнять запись сразу:
+
+```text
+LLM предлагает изменение
+    ↓
+изменение нормализуется
+    ↓
+проверяется путь
+    ↓
+проверяется стадия
+    ↓
+проверяются инварианты
+    ↓
+строится diff
+    ↓
+пользователь подтверждает
+    ↓
+изменение применяется
+    ↓
+запускаются проверки
+```
+
+Вместо инструмента:
+
+```text
+write_file
+```
+
+лучше иметь два шага:
+
+```text
+propose_file_change
+apply_file_change
+```
+
+### `propose_file_change`
+
+Возвращает:
+
+```python
+@dataclass
+class FileChangeProposal:
+    change_id: str
+    project_id: str
+    path: str
+    operation: str
+    old_hash: str | None
+    new_hash: str
+    diff: str
+    risk_level: str
+```
+
+На этом этапе файл ещё не меняется.
+
+### `apply_file_change`
+
+Применяет только конкретное ранее созданное изменение:
+
+```python
+async def apply_file_change(
+    change_id: str,
+    confirmation_token: str,
+) -> ApplyResult:
+    ...
+```
+
+Так LLM не сможет незаметно заменить содержимое между просмотром и подтверждением.
+
+## Защита от потери изменений
+
+Перед записью проверяйте, что файл не изменился с момента создания предложения:
+
+```text
+proposal.old_hash == current_file_hash
+```
+
+Если хэш отличается:
+
+```text
+Файл изменился после создания предложения.
+Нужно построить новый diff.
+```
+
+Это защита от ситуации:
+
+```text
+агент прочитал файл
+пользователь изменил файл вручную
+агент применил старое полное содержимое
+```
+
+Для редактирования лучше хранить:
+
+```text
+old_hash
+new_hash
+unified_diff
+operation
+```
+
+а не только полный новый текст.
+
+## Инструменты файлового слоя
+
+Я бы начинал с небольшого набора:
+
+```text
+workspace.list_tree
+workspace.get_file_info
+workspace.read_file
+workspace.search
+workspace.propose_create
+workspace.propose_edit
+workspace.propose_delete
+workspace.apply_change
+workspace.revert_change
+workspace.get_diff
+```
+
+Не передавайте модели слишком много низкоуровневых функций. Например, `write_bytes`, `chmod`, `create_symlink` и `mount_directory` лучше вообще не предоставлять на первом этапе.
+
+## Интеграция со стадиями
+
+Ваши стадии позволяют очень точно ограничить файловые операции.
+
+### `new`
+
+```text
+создание структуры проекта
+чтение существующих файлов
+```
+
+### `planning`
+
+```text
+чтение файлов
+анализ структуры
+поиск зависимостей
+подготовка плана
+создание diff — без применения
+```
+
+### `plan_approved`
+
+```text
+подготовка изменений
+создание файлов в staging
+подготовка patch
+```
+
+### `implementation`
+
+```text
+применение подтверждённых изменений
+создание и редактирование файлов
+```
+
+### `validation`
+
+```text
+чтение результатов
+запуск разрешённых проверок
+исправление только после разрешённого возврата в implementation
+```
+
+### `done`
+
+```text
+только чтение и экспорт
+```
+
+### `paused`
+
+```text
+никаких изменений
+```
+
+### `failed`
+
+```text
+анализ и восстановление через /task retry
+```
+
+Матрица политики может выглядеть так:
+
+```python
+FILE_STAGE_POLICY = {
+    TaskStage.NEW: {"read", "list", "propose_create"},
+    TaskStage.PLANNING: {"read", "list", "search", "propose_edit"},
+    TaskStage.PLAN_APPROVED: {
+        "read",
+        "list",
+        "search",
+        "propose_create",
+        "propose_edit",
+    },
+    TaskStage.IMPLEMENTATION: {
+        "read",
+        "list",
+        "search",
+        "apply_change",
+    },
+    TaskStage.VALIDATION: {
+        "read",
+        "list",
+        "search",
+    },
+    TaskStage.DONE: {"read", "list", "search"},
+    TaskStage.PAUSED: set(),
+    TaskStage.FAILED: {"read", "list", "search"},
+}
+```
+
+Здесь есть важная тонкость: `apply_change` должен быть разрешён только для уже подтверждённого изменения, которое было подготовлено в допустимой стадии.
+
+## Как использовать ваши инварианты
+
+Добавьте файловые действия в `ProposedAction`:
+
+```python
+@dataclass(frozen=True)
+class ProposedAction:
+    action_type: str
+    tool_name: str | None = None
+    path: str | None = None
+    operation: str | None = None
+    changes_files: bool = False
+    deletes_files: bool = False
+    modifies_config: bool = False
+    modifies_dependencies: bool = False
+    modifies_schema: bool = False
+```
+
+Примеры правил:
+
+```text
+запрещено редактировать .env
+запрещено менять lock-файлы без подтверждения
+запрещено добавлять зависимости без явного подтверждения
+запрещено удалять файлы в production-проекте
+запрещено изменять миграции базы данных на стадии implementation
+```
+
+Можно добавить классификацию файлов:
+
+```python
+PROTECTED_PATTERNS = {
+    ".env",
+    ".env.*",
+    "*.pem",
+    "*.key",
+    "id_rsa",
+    "credentials.*",
+    "secrets.*",
+    "users/**",
+    "storage/**",
+}
+```
+
+Запреты должны выполняться кодом, а не только попадать в промт.
+
+## Отдельный `WorkspacePolicy`
+
+Не перегружайте общий `InvariantChecker` всеми деталями файловой системы. Хорошо разделить:
+
+```text
+InvariantChecker
+  → бизнес-ограничения проекта
+
+WorkspacePolicy
+  → границы путей, типы файлов, операции
+
+StateMachine
+  → стадия задачи
+
+ConfirmationPolicy
+  → нужен ли человек
+```
+
+Тогда итоговая проверка выглядит так:
+
+```python
+workspace_policy.check(request)
+state_machine_policy.check(request, task_state)
+invariant_checker.check(proposed_action)
+confirmation_policy.check(request)
+```
+
+Все четыре проверки должны пройти до вызова MCP.
+
+## Проекты как отдельные сущности
+
+Сейчас у вас task хранится в:
+
+```text
+users/<id>/tasks/<task_name>/
+```
+
+Для полноценной работы с проектами не стоит использовать `task_name` как путь к проекту. Добавьте отдельную модель:
+
+```python
+@dataclass
+class Project:
+    project_id: str
+    user_id: str
+    display_name: str
+    root_relative_path: str
+    language: str | None
+    created_at: str
+    status: str
+```
+
+И отдельный реестр:
+
+```text
+users/<id>/projects.json
+```
+
+Например:
+
+```json
+{
+  "projects": [
+    {
+      "project_id": "den_n",
+      "display_name": "den_N",
+      "root_relative_path": "workspaces/user_1/den_n",
+      "language": "python",
+      "status": "active"
+    }
+  ]
+}
+```
+
+Задача отвечает на вопрос:
+
+```text
+что нужно сделать?
+```
+
+Проект отвечает на вопрос:
+
+```text
+с какими файлами можно работать?
+```
+
+Это разные сущности, и их лучше не смешивать.
+
+## Не храните абсолютные пути в памяти
+
+В `working_memory` и `long_term_memory` сохраняйте:
+
+```text
+project_id
+relative_path
+```
+
+а не:
+
+```text
+/home/alex/projects/den_n/src/core/agent.py
+```
+
+Преимущества:
+
+- проект можно перенести;
+- путь не раскрывается модели без необходимости;
+- нет зависимости от ОС;
+- меньше риска случайно вывести чувствительные данные;
+- проще мигрировать хранилище.
+
+Пример:
+
+```json
+{
+  "project_id": "den_n",
+  "files_changed": [
+    "core/agent.py",
+    "core/tool_executor.py"
+  ]
+}
+```
+
+## Работа с большими файлами
+
+`read_file` должен иметь ограничения:
+
+```python
+MAX_FILE_BYTES = 512_000
+MAX_RESULT_BYTES = 1_000_000
+MAX_TREE_ENTRIES = 2_000
+```
+
+Для больших файлов нужны:
+
+```text
+read_file(path, start_line, end_line)
+search(query, glob)
+get_file_info(path)
+```
+
+Не передавайте модели весь проект целиком. Сначала:
+
+```text
+структура
+→ релевантные файлы
+→ нужные диапазоны строк
+→ краткие фрагменты
+```
+
+Ваш существующий токен-бюджет идеально подходит для этого. Добавьте отдельный бюджет файлового контекста:
+
+```python
+FileContextBudget(
+    max_files=20,
+    max_file_bytes=500_000,
+    max_prompt_tokens=8_000,
+)
+```
+
+## Проверка результата после изменения
+
+После `apply_change` файловый слой должен вернуть:
+
+```python
+@dataclass
+class ApplyResult:
+    change_id: str
+    path: str
+    old_hash: str | None
+    new_hash: str
+    bytes_written: int
+    diff: str
+```
+
+Затем агент может перейти к validation, где запускаются проверки:
+
+```text
+синтаксический анализ
+→ unit-тесты
+→ линтер
+→ проверка структуры
+```
+
+Но для запуска команд нужен отдельный `CommandExecutor`, а не расширение файлового сервера.
+
+## Shell-команды — отдельный контур
+
+Не объединяйте:
+
+```text
+работу с файлами
+```
+
+и:
+
+```text
+выполнение произвольных команд
+```
+
+Для Python-проектов позднее можно добавить:
+
+```text
+project.run_tests
+project.run_linter
+project.run_formatter
+```
+
+Но это должны быть заранее разрешённые команды:
+
+```python
+ALLOWED_COMMANDS = {
+    "pytest": ["python", "-m", "pytest"],
+    "ruff": ["ruff", "check", "."],
+    "format": ["ruff", "format", "."],
+}
+```
+
+Не передавайте исполнителю строку shell от LLM:
+
+```python
+subprocess.run(user_generated_string, shell=True)
+```
+
+Лучше использовать массив аргументов, без `shell=True`, с:
+
+- рабочей директорией проекта;
+- timeout;
+- лимитом CPU и памяти;
+- ограничением сети;
+- переменными окружения allowlist;
+- отдельным пользователем ОС;
+- sandbox-контейнером.
+
+Если нужны команды с записью, запускайте их сначала в отдельном staging-каталоге.
+
+## Git как дополнительный слой
+
+Для проектной работы почти сразу понадобится Git. Но Git также лучше подключать не как произвольную команду, а через отдельный адаптер:
+
+```text
+project.git_status
+project.git_diff
+project.git_log
+project.git_create_branch
+project.git_commit
+```
+
+На первом этапе разрешите только чтение:
+
+```text
+git_status
+git_diff
+git_log
+```
+
+Позже:
+
+```text
+create_branch
+commit
+```
+
+Требуют подтверждения. Не разрешайте агенту автоматически выполнять:
+
+```text
+git push
+git reset --hard
+git clean -fd
+```
+
+## Интеграция с MCP filesystem
+
+Для вашего агента я бы сделал два уровня.
+
+### Внешний MCP-сервер
+
+Используется как поставщик низкоуровневых файловых операций:
+
+```text
+read_file
+list_directory
+create_directory
+write_file
+move_file
+delete_file
+```
+
+### Внутренний `WorkspaceFileAdapter`
+
+Он:
+
+- преобразует `project_id + relative_path` в путь;
+- применяет `WorkspacePolicy`;
+- проверяет стадию;
+- проверяет инварианты;
+- создаёт diff;
+- требует подтверждение;
+- вызывает MCP;
+- записывает аудит.
+
+То есть LLM не должна напрямую видеть необработанные MCP-функции:
+
+```text
+mcp.filesystem.write_file
+```
+
+Лучше передавать ей безопасные доменные инструменты:
+
+```text
+workspace.propose_edit
+workspace.apply_change
+```
+
+Внутри `workspace.apply_change` уже может использоваться MCP.
+
+## Как будет выглядеть адаптер
+
+```python
+class WorkspaceFileAdapter:
+    def __init__(
+        self,
+        mcp_gateway,
+        workspace_resolver,
+        workspace_policy,
+        state_machine,
+        invariant_checker,
+        audit_logger,
+    ):
+        self.gateway = mcp_gateway
+        self.resolver = workspace_resolver
+        self.policy = workspace_policy
+        self.state_machine = state_machine
+        self.invariants = invariant_checker
+        self.audit = audit_logger
+
+    async def read_file(self, project_id: str, relative_path: str, context):
+        path = self.resolver.resolve_relative(
+            context.user_id,
+            project_id,
+            relative_path,
+        )
+
+        self.policy.check_read(project_id, relative_path, context)
+
+        return await self.gateway.call(
+            server_id="filesystem",
+            tool_name="read_file",
+            arguments={"path": str(path)},
+        )
+```
+
+Но для записи не делайте такой прямой метод сразу:
+
+```python
+async def write_file(...):
+    ...
+```
+
+Сделайте:
+
+```python
+async def propose_edit(...):
+    ...
+```
+
+и:
+
+```python
+async def apply_edit(change_id, confirmation):
+    ...
+```
+
+## Какие файлы защищать особенно жёстко
+
+По умолчанию запретите или требуйте отдельное подтверждение для:
+
+```text
+.env
+.env.*
+*.pem
+*.key
+id_rsa
+credentials.*
+secrets.*
+*.sqlite
+*.db
+users/**
+storage/**
+.git/config
+.git/hooks/**
+Dockerfile
+docker-compose.yml
+pyproject.toml
+package.json
+lock-файлы
+миграции БД
+```
+
+Некоторые из них, например `pyproject.toml`, могут быть частью обычной разработки. Поэтому лучше различать:
+
+```text
+полный запрет
+подтверждение
+разрешено
+```
+
+Пример:
+
+```yaml
+files:
+  deny:
+    - ".env"
+    - "*.pem"
+    - "users/**"
+    - "storage/**"
+
+  confirmation:
+    - "pyproject.toml"
+    - "package.json"
+    - "Dockerfile"
+    - "migrations/**"
+    - ".git/**"
+
+  allow:
+    - "src/**"
+    - "tests/**"
+    - "docs/**"
+```
+
+## Что добавить в CLI
+
+Минимальный набор:
+
+```text
+/project list
+/project add <id> <path>
+/project use <id>
+/project info
+/workspace tree
+/workspace read <path>
+/workspace diff
+/workspace changes
+/workspace approve <change_id>
+/workspace reject <change_id>
+/workspace rollback <change_id>
+```
+
+Полезно, чтобы активный проект отображался в `/state`:
+
+```text
+Task: refactor_memory
+Project: den_n
+Stage: implementation
+Pending changes: 3
+```
+
+## Как хранить изменения
+
+Добавьте к задаче:
+
+```text
+tasks/<task_name>/
+├── task_state.json
+├── working_memory.json
+├── invariants.json
+├── sessions/
+├── changes/
+│   ├── ch_001.json
+│   └── ch_002.json
+└── tool_audit.jsonl
+```
+
+`changes/<id>.json`:
+
+```json
+{
+  "change_id": "ch_001",
+  "project_id": "den_n",
+  "path": "core/agent.py",
+  "operation": "edit",
+  "old_hash": "sha256:...",
+  "new_hash": "sha256:...",
+  "diff": "...",
+  "status": "proposed",
+  "created_at": "...",
+  "approved_at": null,
+  "applied_at": null
+}
+```
+
+Так можно реализовать:
+
+```text
+proposed
+→ approved
+→ applied
+→ validated
+```
+
+И это хорошо ложится на вашу машину состояний, но не требует превращать каждую файловую операцию в отдельный `TaskStage`.
+
+## Дополнительное состояние изменений
+
+Можно добавить отдельный автомат:
+
+```python
+class ChangeStatus(Enum):
+    PROPOSED = "proposed"
+    APPROVED = "approved"
+    APPLIED = "applied"
+    VALIDATED = "validated"
+    REJECTED = "rejected"
+    STALE = "stale"
+    FAILED = "failed"
+```
+
+Это не замена `TaskStage`, а локальный workflow конкретного изменения.
+
+Связь:
+
+```text
+TaskStage.PLANNING
+  → ChangeStatus.PROPOSED
+
+TaskStage.PLAN_APPROVED
+  → ChangeStatus.APPROVED
+
+TaskStage.IMPLEMENTATION
+  → ChangeStatus.APPLIED
+
+TaskStage.VALIDATION
+  → ChangeStatus.VALIDATED
+```
+
+Но основной `TaskStage` должен оставаться источником разрешений.
+
+## Рекомендуемый первый вертикальный срез
+
+Не начинайте сразу с полноценного автономного coding-agent. Реализуйте следующий сценарий:
+
+```text
+1. /project add den_n <directory>
+2. /project use den_n
+3. /workspace tree
+4. агент читает несколько файлов
+5. /plan формирует план
+6. агент создаёт diff
+7. /approve разрешает план
+8. /workspace approve <change_id>
+9. файл изменяется
+10. /check запускает существующую проверку
+```
+
+В этот срез войдут:
+
+- `ProjectRegistry`;
+- `WorkspaceResolver`;
+- `ToolDescriptor`;
+- `WorkspacePolicy`;
+- `propose_edit`;
+- `apply_edit`;
+- audit log;
+- интеграция с текущими стадиями.
+
+## Итоговая рекомендация
+
+Для вашей архитектуры оптимальная модель такая:
+
+```text
+ProjectRegistry
+  → знает проекты
+
+WorkspaceResolver
+  → превращает project_id + relative_path в безопасный путь
+
+Filesystem MCP
+  → выполняет низкоуровневые операции
+
+WorkspacePolicy
+  → ограничивает пути и типы операций
+
+InvariantChecker
+  → проверяет проектные правила
+
+StateMachine
+  → проверяет текущую стадию
+
+ChangeManager
+  → создаёт diff, подтверждение и применение
+
+MemoryPolicy
+  → решает, что записать в память
+
+Store
+  → сохраняет проекты, изменения и аудит
+```
+
+Начинайте с **read-only доступа**, затем добавьте `propose_edit`, и только потом `apply_edit` с подтверждением. Для `den_15` это будет значительно надёжнее, чем просто подключить файловый MCP-сервер и передать LLM инструменты `write_file` и `delete_file`.
+
