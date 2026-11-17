@@ -118,5 +118,57 @@
  
  
  
+ Пути в base_project_rules.md
+
+ Все документы и артефакты теперь под $PROJ/dev/:
+
+ ```text
+$PROJ/
+└── dev/
+    ├── master_plan.md
+    ├── journal.md
+    ├── plans/
+    ├── errors/
+    ├── artifacts/
+    ├── work/
+    │   ├── logs/
+    │   ├── tmp/
+    │   └── tools/
+    ├── arch/
+    ├── gate/
+    └── sessions_log/
+        └── <ДД.ММ.ГГГГ>/
+            └── sessions_log_<ДД.ММ.ГГГГ>-<ЧЧ-ММ>.md
+ ```
+
+ Обновлены определения:
+
+ ```text
+$WORK = $PROJ/dev/work
+$ARCH = $PROJ/dev/arch
+$LOGS = $PROJ/dev/work/logs
+$ERR  = $PROJ/dev/errors
+$ART  = $PROJ/dev/artifacts
+ ```
+
+ Правило «каждый вывод — внутри проекта» уточнено до $PROJ/dev; в корне проекта остаются только код, данные и запуск.
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
  
  
